@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "invoice_number": "SYN-VTCE-0006",
+  "invoice_series": "SVTC",
+  "invoice_series_absent_confirmed": false,
+  "invoice_date": "2026-06-06",
+  "supplier_tax_id": "SYN-VTCE-006",
+  "supplier_name": "Synthetic Supplier VTCE 06",
+  "po_number": "PO-VTCE-006",
+  "currency": "VND",
+  "subtotal": "89250.25",
+  "tax_total": "8925.02",
+  "grand_total": "98175.27",
+  "discount_total": "0.00",
+  "shipping_total": "0.00",
+  "lines": [
+    {
+      "line_id": null,
+      "sku": "SKU-VTCE-06-1",
+      "description": "Synthetic item VTCE 06-1",
+      "unit": "piece",
+      "quantity": "1.00",
+      "unit_price": "89250.25",
+      "net_amount": "89250.25"
+    }
+  ]
+}

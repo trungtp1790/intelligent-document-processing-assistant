@@ -1,0 +1,543 @@
+{
+  "report_version": "1.0",
+  "evaluation_type": "ai_extraction_evaluation",
+  "run_id": "20261027T073154Z-52dc1401",
+  "generated_at": "2026-10-27T07:31:55.203982+00:00",
+  "execution_status": "LIVE_PENDING",
+  "git_sha": null,
+  "dependency_lock_sha256": "a0ae78142ffaa7f922fad584f753911964b9c6cbc6ce3f130e5fd86716a3862d",
+  "dataset": {
+    "dataset_id": "synthetic-invoice-corpus-v1",
+    "manifest_sha256": "567c5a0966943675a150f8c67bd14a0dfd8255548205603147ac9579cad7fd35",
+    "dataset_type": "ai_extraction_evaluation",
+    "synthetic_only": true,
+    "label_status": "programmatic synthetic reference labels; not human annotated",
+    "sample_count": 90,
+    "split_policy": {
+      "dev": {
+        "sample_count": 30,
+        "layout_family_count": 3
+      },
+      "validation": {
+        "sample_count": 20,
+        "layout_family_count": 2
+      },
+      "test": {
+        "sample_count": 40,
+        "layout_family_count": 4
+      },
+      "grouping": "layout_family and source_document_id; no family, source document, or file hash may cross splits"
+    },
+    "fixture_samples_included": 0,
+    "fixture_accuracy_included": false
+  },
+  "selection": {
+    "split": "validation",
+    "sample_count": 20,
+    "layout_family_count": 2,
+    "layout_families": {
+      "validation_compact_vietnamese": 10,
+      "validation_two_column_english": 10
+    },
+    "held_out_test_selected": false,
+    "held_out_test_consumed": false
+  },
+  "sample_count": 20,
+  "synthetic_sample_count": 20,
+  "real_sample_count": 0,
+  "processed_sample_count": 20,
+  "completed_sample_count": 0,
+  "blocked_sample_count": 20,
+  "failure_count": 0,
+  "non_success_sample_count": 20,
+  "provider_failure_count": 0,
+  "preflight_blocked_count": 20,
+  "model_input_attempted_sample_count": 0,
+  "live_model_requests_started": 0,
+  "model_output_count": 0,
+  "schema_valid_count": 0,
+  "schema_valid_denominator": 0,
+  "accuracy_status": "NOT_MEASURED",
+  "accuracy": {
+    "header_exact_match": null,
+    "header_exact_match_correct": 0,
+    "header_exact_match_denominator": 0,
+    "header_missing_values": 0,
+    "header_hallucinated_values": 0,
+    "header_by_field": {},
+    "line_cell_by_field": {},
+    "line_detection": {
+      "true_positive": 0,
+      "false_positive": 0,
+      "false_negative": 0,
+      "precision": null,
+      "recall": null,
+      "mean_per_invoice_f1": null
+    },
+    "reconciliation_issue_exact_match": null,
+    "reconciliation_issue_exact_match_denominator": 0,
+    "false_pass_rate_on_labelled_issue_samples": null,
+    "provenance_page_accuracy": null,
+    "provenance_page_correct": 0,
+    "provenance_page_denominator": 0,
+    "provenance_missing_or_invalid_page": 0,
+    "native_quote_verification_rate": null,
+    "native_quote_verified": 0,
+    "native_quote_denominator": 0
+  },
+  "canonical_label_rule_regression": {
+    "passed": 20,
+    "denominator": 20,
+    "passed_rate": 1.0,
+    "ai_accuracy_included": false
+  },
+  "configuration": {
+    "requested_provider": "foundry",
+    "application_extraction_provider": "foundry",
+    "model_id": null,
+    "region": null,
+    "foundry_endpoint": null,
+    "live_flag_requested": true,
+    "allow_live_model_calls": true,
+    "live_preflight_block_code": "PROVIDER_NOT_CONFIGURED",
+    "prompt_version": "invoice-v1",
+    "schema_version": "1.0",
+    "reconciliation_policy_version": "reconciliation-v1",
+    "temperature": 0.0,
+    "max_output_tokens": 4096,
+    "connect_timeout_seconds": 10,
+    "read_timeout_seconds": 180,
+    "job_deadline_seconds": 600,
+    "retry_policy": "one attempt per sample; no automatic eval reruns",
+    "pricing": null,
+    "pricing_unknown_reason": "No versioned pricing configuration is present."
+  },
+  "runtime": {
+    "runner_elapsed_ms": 338.92,
+    "model_latency_median_ms": null,
+    "model_latency_p95_ms": null,
+    "input_tokens": null,
+    "output_tokens": null,
+    "model_calls": 0,
+    "routing_counts": {
+      "native_text": 16,
+      "vision_low_or_unusable_native_text": 4
+    }
+  },
+  "error_analysis": {
+    "failure_counts": {},
+    "blocked_counts": {
+      "PROVIDER_NOT_CONFIGURED": 20
+    },
+    "by_layout_family": {},
+    "by_modality": {},
+    "blocked_by_layout_family": {
+      "validation_compact_vietnamese": {
+        "PROVIDER_NOT_CONFIGURED": 10
+      },
+      "validation_two_column_english": {
+        "PROVIDER_NOT_CONFIGURED": 10
+      }
+    },
+    "blocked_by_modality": {
+      "native_pdf_text": {
+        "PROVIDER_NOT_CONFIGURED": 16
+      },
+      "scanned_pdf": {
+        "PROVIDER_NOT_CONFIGURED": 4
+      }
+    },
+    "samples": [
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-01",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-02",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-03",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-04",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "scanned_pdf",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-05",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-06",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-07",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-08",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "scanned_pdf",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-09",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_compact_vietnamese-10",
+        "layout_family": "validation_compact_vietnamese",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-01",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-02",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-03",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-04",
+        "layout_family": "validation_two_column_english",
+        "modality": "scanned_pdf",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-05",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-06",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-07",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-08",
+        "layout_family": "validation_two_column_english",
+        "modality": "scanned_pdf",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-09",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      },
+      {
+        "status": "BLOCKED",
+        "sample_id": "syn-validation_two_column_english-10",
+        "layout_family": "validation_two_column_english",
+        "modality": "native_pdf_text",
+        "code": "PROVIDER_NOT_CONFIGURED"
+      }
+    ],
+    "interpretation": "Every selected sample was blocked by runtime configuration before a model request started."
+  },
+  "samples": [
+    {
+      "sample_id": "syn-validation_compact_vietnamese-01",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-02",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-03",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-04",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "scanned_pdf",
+      "routing_reason": "vision_low_or_unusable_native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-05",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.02
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-06",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-07",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-08",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "scanned_pdf",
+      "routing_reason": "vision_low_or_unusable_native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-09",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_compact_vietnamese-10",
+      "layout_family": "validation_compact_vietnamese",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-01",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-02",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-03",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-04",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "scanned_pdf",
+      "routing_reason": "vision_low_or_unusable_native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-05",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-06",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-07",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.01
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-08",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "scanned_pdf",
+      "routing_reason": "vision_low_or_unusable_native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.02
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-09",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.02
+    },
+    {
+      "sample_id": "syn-validation_two_column_english-10",
+      "layout_family": "validation_two_column_english",
+      "split": "validation",
+      "synthetic": true,
+      "modality": "native_pdf_text",
+      "routing_reason": "native_text",
+      "status": "BLOCKED",
+      "failure_code": "PROVIDER_NOT_CONFIGURED",
+      "retryable": false,
+      "latency_ms": 0.02
+    }
+  ],
+  "private_predictions_ref": "var/eval_predictions/20261027T073154Z-52dc1401.jsonl",
+  "limitations": [
+    "This AI corpus is synthetic and its programmatic reference labels are not human annotated.",
+    "Synthetic-corpus accuracy is not a claim about real invoices or production performance.",
+    "Fixture/demo regression results are excluded from all AI accuracy metrics.",
+    "A live accuracy run requires explicit CLI opt-in and Bedrock or Foundry runtime configuration."
+  ]
+}

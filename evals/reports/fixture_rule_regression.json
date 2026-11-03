@@ -1,0 +1,166 @@
+{
+  "report_version": "1.0",
+  "evaluation_type": "synthetic_rule_regression",
+  "generated_at": "2026-10-27T07:30:13.694079+00:00",
+  "git_sha": null,
+  "manifest_sha256": "f101192052f94c899686b6617f5b6d914921ba5607b327043e236ea24e4fcb27",
+  "provider": null,
+  "model_id": null,
+  "synthetic_only": true,
+  "ai_extraction_accuracy_measured": false,
+  "sample_count": 12,
+  "passed_count": 12,
+  "failed_count": 0,
+  "observed_issue_counts": {
+    "DUPLICATE_PENDING_INVOICE": 1,
+    "GRAND_TOTAL_MISMATCH": 1,
+    "LINE_MAPPING_REQUIRED": 1,
+    "QUANTITY_MISMATCH": 1,
+    "REQUIRED_FIELD_MISSING": 1,
+    "SOURCE_NOT_TEXT_VERIFIED": 2,
+    "SUPPLIER_MISMATCH": 1,
+    "UNIT_PRICE_MISMATCH": 1,
+    "UNSUPPORTED_CASE": 1
+  },
+  "samples": [
+    {
+      "sample_id": "sample-01",
+      "file": "invoice_valid_native.pdf",
+      "status": "PASS",
+      "expected_findings": [],
+      "observed_findings": [],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-02",
+      "file": "invoice_scan_valid.png",
+      "status": "WARNING",
+      "expected_findings": [
+        "SOURCE_NOT_TEXT_VERIFIED"
+      ],
+      "observed_findings": [
+        "SOURCE_NOT_TEXT_VERIFIED"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-03",
+      "file": "invoice_two_page.pdf",
+      "status": "PASS",
+      "expected_findings": [],
+      "observed_findings": [],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-04",
+      "file": "invoice_missing_number.pdf",
+      "status": "BLOCKED",
+      "expected_findings": [
+        "REQUIRED_FIELD_MISSING"
+      ],
+      "observed_findings": [
+        "REQUIRED_FIELD_MISSING"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-05",
+      "file": "invoice_quantity_mismatch.pdf",
+      "status": "BLOCKED",
+      "expected_findings": [
+        "QUANTITY_MISMATCH"
+      ],
+      "observed_findings": [
+        "QUANTITY_MISMATCH"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-06",
+      "file": "invoice_unit_price_mismatch.pdf",
+      "status": "BLOCKED",
+      "expected_findings": [
+        "UNIT_PRICE_MISMATCH"
+      ],
+      "observed_findings": [
+        "UNIT_PRICE_MISMATCH"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-07",
+      "file": "invoice_grand_total_mismatch.pdf",
+      "status": "BLOCKED",
+      "expected_findings": [
+        "GRAND_TOTAL_MISMATCH"
+      ],
+      "observed_findings": [
+        "GRAND_TOTAL_MISMATCH"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-08",
+      "file": "invoice_supplier_mismatch.pdf",
+      "status": "BLOCKED",
+      "expected_findings": [
+        "SUPPLIER_MISMATCH"
+      ],
+      "observed_findings": [
+        "SUPPLIER_MISMATCH"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-09",
+      "file": "invoice_duplicate_pending_scan.png",
+      "status": "WARNING",
+      "expected_findings": [
+        "DUPLICATE_PENDING_INVOICE",
+        "SOURCE_NOT_TEXT_VERIFIED"
+      ],
+      "observed_findings": [
+        "DUPLICATE_PENDING_INVOICE",
+        "SOURCE_NOT_TEXT_VERIFIED"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-10",
+      "file": "invoice_missing_sku.pdf",
+      "status": "BLOCKED",
+      "expected_findings": [
+        "LINE_MAPPING_REQUIRED"
+      ],
+      "observed_findings": [
+        "LINE_MAPPING_REQUIRED"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-11",
+      "file": "invoice_unsupported_case.pdf",
+      "status": "BLOCKED",
+      "expected_findings": [
+        "UNSUPPORTED_CASE"
+      ],
+      "observed_findings": [
+        "UNSUPPORTED_CASE"
+      ],
+      "passed": true
+    },
+    {
+      "sample_id": "sample-12",
+      "file": "invoice_prompt_injection.pdf",
+      "status": "PASS",
+      "expected_findings": [],
+      "observed_findings": [],
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "Fixtures are synthetic plumbing examples, not evidence of AI accuracy.",
+    "The separate 90-document synthetic evaluation corpus is not used by this fixture report.",
+    "No live provider calls were made by this report."
+  ]
+}

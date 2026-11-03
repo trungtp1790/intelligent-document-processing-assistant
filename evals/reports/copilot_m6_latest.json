@@ -1,0 +1,96 @@
+{
+  "report_version": "1.0",
+  "evaluation_type": "m6_single_vs_multi_agent_experiment",
+  "run_id": "20261102T074239Z-47b8f7fc",
+  "generated_at": "2026-11-02T07:42:39.417875+00:00",
+  "execution_status": "LIVE_PENDING",
+  "input_classification": "eligible_nonfixture_required; real-vs-synthetic is not inferred",
+  "fixture_samples_included": 0,
+  "fixture_accuracy_included": false,
+  "answer_quality_status": "NOT_MEASURED",
+  "human_review_status": "NOT_COLLECTED",
+  "dataset": {
+    "dataset_id": "operator_supplied_nonfixture_invoices",
+    "sample_count": 0,
+    "held_out_test_claimed": false,
+    "sample_content_persisted": false
+  },
+  "sample_count": 0,
+  "complete_count": 0,
+  "partial_count": 0,
+  "blocked_count": 0,
+  "failure_count": 0,
+  "provider_completion_attempt_count": 0,
+  "model_response_count": 0,
+  "preflight_blockers": [
+    "LIVE_FLAG_REQUIRED",
+    "CLOUD_DATA_CONFIRMATION_REQUIRED",
+    "COPILOT_PROVIDER_DISABLED",
+    "LIVE_CALLS_DISABLED",
+    "PROVIDER_NOT_CONFIGURED"
+  ],
+  "configuration": {
+    "provider": "disabled",
+    "deployment_alias": null,
+    "model_family": null,
+    "model_family_note": "Operator supplied; never inferred from the deployment alias.",
+    "temperature": 0.0,
+    "max_output_tokens_per_completion": 768,
+    "arm_deadline_seconds": 45,
+    "single_agent_prompt_version": "m5c-readonly-v1",
+    "multi_agent_prompt_version": "m6-role-prompts-v1",
+    "single_agent_budget": {
+      "max_model_rounds": 4,
+      "max_read_tool_calls": 6
+    },
+    "multi_agent_budget": {
+      "max_model_calls": 4,
+      "planned_model_calls": 3,
+      "max_read_tool_calls": 6,
+      "planned_read_tool_calls": 4,
+      "roles": [
+        "document_reader",
+        "reconciliation_analyst",
+        "explainer_citation_checker"
+      ]
+    },
+    "retry_policy": "no experiment retry; Foundry SDK retries disabled",
+    "pricing_usd_per_million_tokens": null,
+    "pricing_note": "Cost is omitted unless both explicit rates are supplied; no rate is guessed.",
+    "dependency_lock_sha256": "a0ae78142ffaa7f922fad584f753911964b9c6cbc6ce3f130e5fd86716a3862d"
+  },
+  "aggregate_metrics": {
+    "single_agent": {
+      "measured_sample_count": 0,
+      "model_calls": 0,
+      "read_tool_calls": 0,
+      "input_tokens": null,
+      "output_tokens": null,
+      "mean_elapsed_ms": null,
+      "mean_model_latency_ms": null,
+      "answer_quality": "NOT_MEASURED"
+    },
+    "multi_agent": {
+      "measured_sample_count": 0,
+      "model_calls": 0,
+      "read_tool_calls": 0,
+      "input_tokens": null,
+      "output_tokens": null,
+      "mean_elapsed_ms": null,
+      "mean_model_latency_ms": null,
+      "answer_quality": "NOT_MEASURED"
+    }
+  },
+  "error_analysis": {
+    "counts": {}
+  },
+  "private_review_bundle": null,
+  "private_review_bundle_policy": "No question, answer, document, or tool content was persisted.",
+  "samples": [],
+  "limitations": [
+    "Automated source-ID validation does not measure answer correctness or citation entailment.",
+    "Human review is required before making a quality comparison.",
+    "Fixture records are blocked before any provider call and excluded from the experiment.",
+    "A blocked or preflight run has no AI accuracy result."
+  ]
+}

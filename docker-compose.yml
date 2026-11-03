@@ -1,0 +1,138 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: idp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-change-me}
+      POSTGRES_DB: idp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idp -d idp"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [private]
+
+  postgres-test:
+    image: postgres:17.6-alpine
+    profiles: [test]
+    environment:
+      POSTGRES_USER: idp
+      POSTGRES_PASSWORD: idp-test-only
+      POSTGRES_DB: idp_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idp -d idp_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks: [private]
+
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [private]
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://idp:local-only-change-me@postgres:5432/idp}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DOCUMENT_STORAGE_PATH: /var/lib/idp/documents
+    volumes:
+      - documents:/var/lib/idp/documents
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    networks: [private]
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "app.jobs.dispatcher"]
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://idp:local-only-change-me@postgres:5432/idp}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DOCUMENT_STORAGE_PATH: /var/lib/idp/documents
+    volumes:
+      - documents:/var/lib/idp/documents
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import pathlib,time; p=pathlib.Path('/tmp/idp-dispatcher-heartbeat'); assert p.exists() and time.time()-p.stat().st_mtime < 10"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks: [private]
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["celery", "-A", "app.jobs.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "-Q", "invoice"]
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://idp:local-only-change-me@postgres:5432/idp}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DOCUMENT_STORAGE_PATH: /var/lib/idp/documents
+    volumes:
+      - documents:/var/lib/idp/documents
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import subprocess,sys; r=subprocess.run(['celery','-A','app.jobs.celery_app:celery_app','inspect','ping','--timeout=8'],capture_output=True,text=True,timeout=12); sys.exit(0 if 'pong' in r.stdout else 1)"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+    networks: [private]
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_URL: /api/v1
+      IDP_API_PROXY_TARGET: http://api:8000
+    ports: ["127.0.0.1:5173:5173"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks: [private, default]
+
+volumes:
+  pgdata:
+  redisdata:
+  documents:
+
+networks:
+  private:
+    internal: true
+

@@ -1,0 +1,172 @@
+x-backend-environment: &backend-environment
+  APP_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the managed PostgreSQL URL}
+  REDIS_URL: ${REDIS_URL:?Set REDIS_URL to authenticated TLS Redis}
+  STORAGE_BACKEND: s3
+  DOCUMENT_STORAGE_PATH: /tmp/idp/documents
+  S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET to a private bucket}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  S3_SERVER_SIDE_ENCRYPTION: ${S3_SERVER_SIDE_ENCRYPTION:-AES256}
+  S3_KMS_KEY_ID: ${S3_KMS_KEY_ID:-}
+  AWS_REGION: ${AWS_REGION:?Set AWS_REGION}
+  EXTRACTION_PROVIDER: ${EXTRACTION_PROVIDER:?Set EXTRACTION_PROVIDER to bedrock or foundry}
+  ALLOW_LIVE_MODEL_CALLS: "true"
+  BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-}
+  FOUNDRY_MODEL_ENDPOINT: ${FOUNDRY_MODEL_ENDPOINT:-}
+  FOUNDRY_DEPLOYMENT: ${FOUNDRY_DEPLOYMENT:-}
+  FOUNDRY_CONNECT_TIMEOUT_SECONDS: ${FOUNDRY_CONNECT_TIMEOUT_SECONDS:-10}
+  FOUNDRY_READ_TIMEOUT_SECONDS: ${FOUNDRY_READ_TIMEOUT_SECONDS:-180}
+  FOUNDRY_MAX_OUTPUT_TOKENS: ${FOUNDRY_MAX_OUTPUT_TOKENS:-4096}
+  FOUNDRY_TEMPERATURE: ${FOUNDRY_TEMPERATURE:-0.0}
+  COPILOT_PROVIDER: ${COPILOT_PROVIDER:-disabled}
+  COPILOT_TIMEOUT_SECONDS: ${COPILOT_TIMEOUT_SECONDS:-45}
+  COPILOT_MAX_OUTPUT_TOKENS: ${COPILOT_MAX_OUTPUT_TOKENS:-768}
+  EXTRACTION_JOB_DEADLINE_SECONDS: ${EXTRACTION_JOB_DEADLINE_SECONDS:-600}
+  EXTRACTION_PROMPT_VERSION: ${EXTRACTION_PROMPT_VERSION:-invoice-v1}
+  WORKFLOW_ENGINE: langgraph
+  MAX_DOCUMENT_PAGES: ${MAX_DOCUMENT_PAGES:-10}
+  MAX_FILE_MIB: ${MAX_FILE_MIB:-15}
+  JWT_SECRET: ${JWT_SECRET:?Set a random JWT_SECRET}
+  JWT_ISSUER: ${JWT_ISSUER:-idp-assistant}
+  JWT_AUDIENCE: ${JWT_AUDIENCE:-idp-assistant-ui}
+  ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-30}
+  DEMO_PASSWORD: ""
+  FRONTEND_ORIGIN: https://${APP_HOST:?Set APP_HOST to the public hostname}
+
+x-backend-security: &backend-security
+  user: "10001:10001"
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  api:
+    image: intelligent-document-processing-assistant-api:production
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *backend-environment
+      FOUNDRY_API_KEY: ${FOUNDRY_API_KEY:-}
+    secrets:
+      - postgres-ca
+    <<: *backend-security
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      app: {}
+      egress:
+        gw_priority: 1
+
+  dispatcher:
+    image: intelligent-document-processing-assistant-api:production
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "app.jobs.dispatcher"]
+    environment:
+      <<: *backend-environment
+    secrets:
+      - postgres-ca
+    <<: *backend-security
+    healthcheck:
+      test: ["CMD", "python", "-c", "import pathlib,time; p=pathlib.Path('/tmp/idp-dispatcher-heartbeat'); assert p.exists() and time.time()-p.stat().st_mtime < 10"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    networks:
+      app: {}
+      egress:
+        gw_priority: 1
+
+  worker:
+    image: intelligent-document-processing-assistant-api:production
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["celery", "-A", "app.jobs.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "-Q", "invoice"]
+    environment:
+      <<: *backend-environment
+      FOUNDRY_API_KEY: ${FOUNDRY_API_KEY:-}
+    secrets:
+      - postgres-ca
+    <<: *backend-security
+    healthcheck:
+      test: ["CMD", "python", "-c", "import subprocess,sys; r=subprocess.run(['celery','-A','app.jobs.celery_app:celery_app','inspect','ping','--timeout=8'],capture_output=True,text=True,timeout=12); sys.exit(0 if 'pong' in r.stdout else 1)"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    networks:
+      app: {}
+      egress:
+        gw_priority: 1
+
+  frontend:
+    image: intelligent-document-processing-assistant-frontend:production
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.production
+      args:
+        VITE_API_URL: /api/v1
+    user: "101:101"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [app]
+
+  ingress:
+    image: caddy:2.11.7-alpine
+    environment:
+      APP_HOST: ${APP_HOST:?Set APP_HOST to the public hostname}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL for TLS certificate notices}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend: {condition: service_healthy}
+    restart: unless-stopped
+    networks:
+      app: {}
+      edge:
+        gw_priority: 1
+
+volumes:
+  caddy-data:
+  caddy-config:
+
+secrets:
+  postgres-ca:
+    file: ${POSTGRES_CA_FILE:?Set POSTGRES_CA_FILE to the managed database CA bundle}
+
+networks:
+  app:
+    internal: true
+  edge: {}
+  egress: {}

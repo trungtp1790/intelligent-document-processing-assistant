@@ -1,0 +1,10 @@
+.git
+.venv
+.env
+frontend/node_modules
+frontend/npm-cache
+frontend/npm-prefix
+frontend/dist
+frontend/*.tsbuildinfo
+var
+

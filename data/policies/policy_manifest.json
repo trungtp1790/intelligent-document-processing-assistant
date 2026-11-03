@@ -1,0 +1,139 @@
+{
+  "manifest_version": "1",
+  "notice": "Toàn bộ nội dung trong manifest này là synthetic demo guidance, không phải chính sách kế toán, pháp lý hay quy định thật.",
+  "documents": [
+    {
+      "slug": "document-intake",
+      "title": "[DEMO] Hướng dẫn tiếp nhận chứng từ",
+      "version": "1.0",
+      "version_no": 1,
+      "synthetic": true,
+      "pages": [
+        {
+          "page_no": 1,
+          "section": "Định dạng và giới hạn tệp",
+          "content": "Tài liệu hướng dẫn demo: hệ thống tiếp nhận hóa đơn PDF, PNG và JPEG trong giới hạn upload hiện hành. Mỗi tài liệu phải được gắn vào đúng tổ chức đang đăng nhập. Không tải tệp chưa rõ nguồn hoặc có dấu hiệu bị thay đổi. Mẫu DEMO là dữ liệu tổng hợp, không cần API key."
+        },
+        {
+          "page_no": 2,
+          "section": "Tệp lỗi hoặc thiếu trang",
+          "content": "Nếu tệp PDF hỏng, đặt mật khẩu, vượt giới hạn hoặc không đọc được, hãy yêu cầu người gửi cung cấp bản rõ ràng và đầy đủ. Không tự suy diễn nội dung của trang không đọc được. Người review cần đối chiếu trang nguồn trước khi sửa dữ liệu."
+        }
+      ]
+    },
+    {
+      "slug": "discrepancy-handling",
+      "title": "[DEMO] Quy trình xử lý chênh lệch hóa đơn và PO",
+      "version": "1.0",
+      "version_no": 1,
+      "synthetic": true,
+      "pages": [
+        {
+          "page_no": 1,
+          "section": "So sánh dòng hàng",
+          "content": "Tài liệu hướng dẫn demo: khi số lượng, đơn vị tính, đơn giá hoặc thành tiền trên hóa đơn khác purchase order (PO), hãy mở chứng từ gốc và kiểm tra đúng dòng hàng, SKU và đơn vị. Ghi nhận mã cảnh báo do hệ thống trả về. Không sửa PO để làm cho hóa đơn khớp."
+        },
+        {
+          "page_no": 2,
+          "section": "Xử lý chênh lệch",
+          "content": "Người nhập liệu có thể tạo phiên bản hóa đơn đã chỉnh sửa nếu có chứng từ gốc hỗ trợ, và cần ghi lý do sửa. Nếu chênh lệch vẫn chưa rõ, chuyển reviewer xem xét. Kết quả đối soát được tính lại từ dữ liệu hóa đơn và PO; đoạn hướng dẫn demo này không thay đổi tolerance hay mã quy tắc."
+        }
+      ]
+    },
+    {
+      "slug": "review-and-approval",
+      "title": "[DEMO] Hướng dẫn review và phê duyệt",
+      "version": "1.0",
+      "version_no": 1,
+      "synthetic": true,
+      "pages": [
+        {
+          "page_no": 1,
+          "section": "Kiểm tra nguồn",
+          "content": "Tài liệu hướng dẫn demo: reviewer kiểm tra trường dữ liệu trên trang chứng từ gốc, nhà cung cấp, mã số thuế, số hóa đơn, ngày và tổng tiền. Giá trị do model đề xuất là untrusted data cho đến khi được con người đối chiếu. Cảnh báo không được bỏ qua chỉ vì model trả về độ tin cậy cao."
+        },
+        {
+          "page_no": 2,
+          "section": "Quyền quyết định",
+          "content": "Chỉ tài khoản có role reviewer mới có thể approve hoặc reject trong ứng dụng. Operator có thể sửa hồ sơ và đối soát nhưng không có quyền phê duyệt. Reviewer phải giải quyết blocking issue và xác nhận cảnh báo theo giao diện trước khi quyết định. Hướng dẫn này không tự tạo approval."
+        }
+      ]
+    },
+    {
+      "slug": "duplicate-invoices",
+      "title": "[DEMO] Xử lý hồ sơ có số hóa đơn trùng",
+      "version": "1.0",
+      "version_no": 1,
+      "synthetic": true,
+      "pages": [
+        {
+          "page_no": 1,
+          "section": "Kiểm tra trùng lặp",
+          "content": "Tài liệu hướng dẫn demo: số hóa đơn trùng là dấu hiệu cần review, không phải kết luận gian lận và cũng không phải căn cứ tự động từ chối. Đối chiếu nhà cung cấp, mã số thuế, series, ngày lập, giá trị và trạng thái các hồ sơ liên quan."
+        },
+        {
+          "page_no": 2,
+          "section": "Ghi nhận kết quả",
+          "content": "Nếu hai hồ sơ là bản trùng, reviewer ghi nhận cách xử lý theo chứng từ và quy trình của tổ chức. Nếu chưa đủ thông tin, để hồ sơ ở trạng thái cần xem xét và yêu cầu bổ sung. Không tự động approve, reject hoặc xóa hồ sơ dựa trên một mã số hóa đơn."
+        }
+      ]
+    },
+    {
+      "slug": "version-history",
+      "title": "[DEMO] Sửa dữ liệu và lưu lịch sử phiên bản",
+      "version": "1.0",
+      "version_no": 1,
+      "synthetic": true,
+      "pages": [
+        {
+          "page_no": 1,
+          "section": "Tạo phiên bản mới",
+          "content": "Tài liệu hướng dẫn demo: khi người dùng sửa dữ liệu hóa đơn, hệ thống tạo invoice version mới thay vì ghi đè phiên bản cũ. Người sửa ghi lý do và trang nguồn đã kiểm tra. Số tiền được lưu theo decimal; không dùng số thực floating point để tự tính giá trị đối soát."
+        },
+        {
+          "page_no": 2,
+          "section": "Đối soát và snapshot",
+          "content": "Mỗi lần đối soát gắn với invoice version và PO cụ thể. Khi dữ liệu thay đổi, snapshot đối soát mới được tạo; kết quả và approval cũ vẫn tham chiếu phiên bản trước. Hướng dẫn demo không cho phép sửa audit trail, reconciliation snapshot hoặc approval record."
+        }
+      ]
+    },
+    {
+      "slug": "tenant-privacy",
+      "title": "[DEMO] Quyền riêng tư và phạm vi tổ chức",
+      "version": "1.0",
+      "version_no": 1,
+      "synthetic": true,
+      "pages": [
+        {
+          "page_no": 1,
+          "section": "Dữ liệu theo tổ chức",
+          "content": "Tài liệu hướng dẫn demo: chứng từ, hóa đơn, purchase order và tài liệu hướng dẫn được giới hạn theo organization của phiên đăng nhập. Không chia sẻ nội dung hồ sơ của tổ chức này cho người dùng thuộc tổ chức khác. Server lấy organization từ access token đã xác thực, không lấy từ câu hỏi người dùng."
+        },
+        {
+          "page_no": 2,
+          "section": "Thông tin nhạy cảm",
+          "content": "Chỉ trả về các trích dẫn hướng dẫn cần thiết cho câu hỏi. Không ghi bearer token, password, nội dung upload hoặc câu hỏi có thể chứa dữ liệu nhạy cảm vào log. Mục demo này chỉ chứa tài liệu tổng hợp và không có dữ liệu chính sách nội bộ thật."
+        }
+      ]
+    },
+    {
+      "slug": "guidance-boundaries",
+      "title": "[DEMO] Giới hạn của hướng dẫn tổng hợp",
+      "version": "1.0",
+      "version_no": 1,
+      "synthetic": true,
+      "pages": [
+        {
+          "page_no": 1,
+          "section": "Không phải chính sách thật",
+          "content": "Tài liệu hướng dẫn demo này là nội dung tổng hợp để kiểm tra retrieval và citation. Nó không đại diện quy định kế toán, thuế, pháp lý hay quy trình thật của bất kỳ doanh nghiệp nào. Khi câu trả lời cần căn cứ chính sách thật, hãy hỏi bộ phận phụ trách và trích dẫn tài liệu được phê duyệt."
+        },
+        {
+          "page_no": 2,
+          "section": "Không thay thế rule code",
+          "content": "Nội dung truy xuất chỉ hỗ trợ giải thích cho người dùng. Nó không thay đổi tolerance, supplier mapping, purchase order, rule đối soát, role authorization, approval hoặc payment. Nếu không tìm thấy nguồn liên quan, hệ thống phải nói chưa đủ thông tin thay vì tự tạo chính sách."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "invoice_number": null,
+  "invoice_series": "STRE",
+  "invoice_series_absent_confirmed": false,
+  "invoice_date": "2026-10-10",
+  "supplier_tax_id": "SYN-TRE-010",
+  "supplier_name": "Synthetic Supplier TRE 10",
+  "po_number": "PO-TRE-010",
+  "currency": "VND",
+  "subtotal": "1619252.75",
+  "tax_total": "161925.28",
+  "grand_total": "1781178.03",
+  "discount_total": "0.00",
+  "shipping_total": "0.00",
+  "lines": [
+    {
+      "line_id": null,
+      "sku": "SKU-TRE-10-1",
+      "description": "Synthetic item TRE 10-1",
+      "unit": "piece",
+      "quantity": "5.00",
+      "unit_price": "140250.25",
+      "net_amount": "701251.25"
+    },
+    {
+      "line_id": null,
+      "sku": "SKU-TRE-10-2",
+      "description": "Synthetic item TRE 10-2",
+      "unit": "piece",
+      "quantity": "6.00",
+      "unit_price": "153000.25",
+      "net_amount": "918001.50"
+    }
+  ]
+}

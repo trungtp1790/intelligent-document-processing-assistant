@@ -1,0 +1,28 @@
+{
+  "name": "idp-assistant-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "lint": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.74.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.3.0",
+    "@types/react": "19.0.12",
+    "@types/react-dom": "19.0.4",
+    "@vitejs/plugin-react": "4.3.4",
+    "jsdom": "26.0.0",
+    "typescript": "5.8.2",
+    "vite": "6.4.5",
+    "vitest": "5.0.5"
+  }
+}

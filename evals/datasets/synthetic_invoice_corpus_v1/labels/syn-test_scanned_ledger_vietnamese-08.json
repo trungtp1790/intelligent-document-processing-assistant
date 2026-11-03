@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "invoice_number": "SYN-TSLV-0008",
+  "invoice_series": "STSL",
+  "invoice_series_absent_confirmed": false,
+  "invoice_date": "2026-08-08",
+  "supplier_tax_id": "SYN-TSLV-008",
+  "supplier_name": "Synthetic Supplier TSLV 08",
+  "po_number": "PO-TSLV-008",
+  "currency": "VND",
+  "subtotal": "1555503.00",
+  "tax_total": "155550.30",
+  "grand_total": "1711053.30",
+  "discount_total": "0.00",
+  "shipping_total": "0.00",
+  "lines": [
+    {
+      "line_id": null,
+      "sku": "SKU-TSLV-08-1",
+      "description": "Synthetic item TSLV 08-1",
+      "unit": "piece",
+      "quantity": "3.00",
+      "unit_price": "114750.25",
+      "net_amount": "344250.75"
+    },
+    {
+      "line_id": null,
+      "sku": "SKU-TSLV-08-2",
+      "description": "Synthetic item TSLV 08-2",
+      "unit": "piece",
+      "quantity": "4.00",
+      "unit_price": "127500.25",
+      "net_amount": "510001.00"
+    },
+    {
+      "line_id": null,
+      "sku": "SKU-TSLV-08-3",
+      "description": "Synthetic item TSLV 08-3",
+      "unit": "piece",
+      "quantity": "5.00",
+      "unit_price": "140250.25",
+      "net_amount": "701251.25"
+    }
+  ]
+}

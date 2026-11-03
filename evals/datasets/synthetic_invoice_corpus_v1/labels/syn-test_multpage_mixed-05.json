@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "invoice_number": "SYN-TMM-0005",
+  "invoice_series": "STMM",
+  "invoice_series_absent_confirmed": false,
+  "invoice_date": "2026-05-05",
+  "supplier_tax_id": "SYN-TMM-005",
+  "supplier_name": "Synthetic Supplier TMM 05",
+  "po_number": "PO-TMM-005",
+  "currency": "VND",
+  "subtotal": "828752.50",
+  "tax_total": "82875.25",
+  "grand_total": "911627.75",
+  "discount_total": "0.00",
+  "shipping_total": "0.00",
+  "lines": [
+    {
+      "line_id": null,
+      "sku": "SKU-TMM-05-1",
+      "description": "Synthetic item TMM 05-1",
+      "unit": "piece",
+      "quantity": "7.00",
+      "unit_price": "76500.25",
+      "net_amount": "535501.75"
+    },
+    {
+      "line_id": null,
+      "sku": "SKU-TMM-05-2",
+      "description": "Synthetic item TMM 05-2",
+      "unit": "piece",
+      "quantity": "1.00",
+      "unit_price": "89250.25",
+      "net_amount": "89250.25"
+    },
+    {
+      "line_id": null,
+      "sku": "SKU-TMM-05-3",
+      "description": "Synthetic item TMM 05-3",
+      "unit": "piece",
+      "quantity": "2.00",
+      "unit_price": "102000.25",
+      "net_amount": "204000.50"
+    }
+  ]
+}
