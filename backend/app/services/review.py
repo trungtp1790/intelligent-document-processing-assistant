@@ -30,7 +30,7 @@ from app.db.models import (
 from app.domain.errors import DomainError
 from app.domain.reconciliation import POLICY_VERSION, reconcile
 from app.domain.snapshots import canonical_hash
-from app.schemas import DecisionCreate, ReconciliationCreate, VersionCreate
+from app.schemas import DecisionCreate, EvidenceResponse, ReconciliationCreate, VersionCreate
 from app.security import Principal
 from app.services.common import IdempotentReplay, audit, begin_idempotent, finish_idempotent
 from app.services.purchase_orders import po_response
@@ -112,10 +112,18 @@ def create_invoice_version(
         )
     if invoice.workflow_status in {"APPROVED", "REJECTED"}:
         raise DomainError("INVOICE_TERMINAL", "Hồ sơ đã kết thúc và không thể sửa.", 409)
+    if body.manual_evidence_pages and actor.role != "reviewer":
+        raise DomainError(
+            "REVIEWER_REQUIRED",
+            "Chỉ reviewer mới có thể xác nhận trang nguồn cho giá trị chưa có provenance.",
+            403,
+        )
     document = db.scalar(
         select(Document).where(Document.org_id == actor.org_id, Document.id == invoice.document_id)
     )
-    if document is None or body.manual_source_page > document.pages:
+    if document is None or (
+        body.manual_source_page is not None and body.manual_source_page > document.pages
+    ):
         raise DomainError("INVALID_SOURCE_PAGE", "Trang nguồn không nằm trong tài liệu.", 422)
 
     draft = body.draft.model_dump(mode="json")
@@ -136,6 +144,21 @@ def create_invoice_version(
         line["line_id"] = supplied
     draft["document_id"] = str(invoice.document_id)
     draft["schema_version"] = "1.0"
+    old_fields, new_fields = _leaf_fields(old_data), _leaf_fields(draft)
+    changed_populated_paths = {
+        field_path
+        for field_path, value in new_fields.items()
+        if value is not None
+        and old_fields.get(field_path) != value
+        and field_path not in body.manual_evidence_pages
+    }
+    if changed_populated_paths and body.manual_source_page is None:
+        raise DomainError(
+            "MANUAL_SOURCE_PAGE_REQUIRED",
+            "Hãy nhập trang đã đối chiếu cho các giá trị vừa chỉnh sửa.",
+            422,
+            {"field_paths": sorted(changed_populated_paths)},
+        )
     snapshot_hash = canonical_hash(draft)
     version = InvoiceVersion(
         org_id=actor.org_id,
@@ -160,12 +183,62 @@ def create_invoice_version(
         )
     ).all()
     evidence_by_path = {item.field_path: item for item in old_evidence}
-    old_fields, new_fields = _leaf_fields(old_data), _leaf_fields(draft)
-    for field_path, value in new_fields.items():
-        if value is None and old_fields.get(field_path) is None:
-            continue
+    unknown_manual_paths = set(body.manual_evidence_pages) - set(new_fields)
+    if unknown_manual_paths:
+        raise DomainError(
+            "INVALID_MANUAL_EVIDENCE_FIELD",
+            "Manual source evidence references a field outside the invoice version.",
+            422,
+        )
+    for field_path, page_no in body.manual_evidence_pages.items():
+        value = new_fields[field_path]
         previous = evidence_by_path.get(field_path)
-        if field_path in old_fields and old_fields[field_path] == value and previous:
+        page_is_already_valid = (
+            previous is not None
+            and previous.page_no is not None
+            and 1 <= previous.page_no <= document.pages
+        )
+        if value is None or isinstance(value, bool) or page_is_already_valid:
+            raise DomainError(
+                "INVALID_MANUAL_EVIDENCE_FIELD",
+                "Manual source evidence is allowed only for a populated field that lacks a valid page.",
+                422,
+            )
+        if not 1 <= page_no <= document.pages:
+            raise DomainError("INVALID_SOURCE_PAGE", "Trang nguồn không nằm trong tài liệu.", 422)
+
+    for field_path, value in new_fields.items():
+        previous = evidence_by_path.get(field_path)
+        if value is None and old_fields.get(field_path) is None and previous is None:
+            continue
+        unchanged = field_path in old_fields and old_fields[field_path] == value
+        manual_page = body.manual_evidence_pages.get(field_path)
+        if manual_page is not None:
+            db.add(
+                ExtractionEvidence(
+                    org_id=actor.org_id,
+                    invoice_id=invoice.id,
+                    version_id=version.id,
+                    field_path=field_path,
+                    page_no=manual_page,
+                    raw_value=previous.raw_value if previous and unchanged else None,
+                    normalized_value=(
+                        previous.normalized_value if previous and unchanged else str(value)
+                    ),
+                    raw_text=None,
+                    bbox=None,
+                    confidence=None,
+                    normalization_issue=(
+                        previous.normalization_issue if previous and unchanged else None
+                    ),
+                    origin="manual",
+                    verification_state="MANUAL",
+                    actor_id=actor.user_id,
+                    note=body.reason[:500],
+                )
+            )
+            continue
+        if unchanged and previous:
             db.add(
                 ExtractionEvidence(
                     org_id=actor.org_id,
@@ -177,13 +250,15 @@ def create_invoice_version(
                     normalized_value=previous.normalized_value,
                     raw_text=previous.raw_text,
                     bbox=previous.bbox,
+                    confidence=previous.confidence,
+                    normalization_issue=previous.normalization_issue,
                     origin=previous.origin,
                     verification_state=previous.verification_state,
                     actor_id=previous.actor_id,
                     note=previous.note,
                 )
             )
-        else:
+        elif value is not None:
             db.add(
                 ExtractionEvidence(
                     org_id=actor.org_id,
@@ -191,9 +266,12 @@ def create_invoice_version(
                     version_id=version.id,
                     field_path=field_path,
                     page_no=body.manual_source_page,
-                    raw_value=str(value) if value is not None else None,
-                    normalized_value=str(value) if value is not None else None,
-                    raw_text=str(value) if value is not None else None,
+                    raw_value=None,
+                    normalized_value=str(value),
+                    raw_text=None,
+                    bbox=None,
+                    confidence=None,
+                    normalization_issue=None,
                     origin="manual",
                     verification_state="MANUAL",
                     actor_id=actor.user_id,
@@ -226,6 +304,7 @@ def create_invoice_version(
             "version_no": version.version_no,
             "reason": body.reason,
             "manual_source_page": body.manual_source_page,
+            "manual_evidence_pages": body.manual_evidence_pages,
         },
     )
     db.commit()
@@ -257,6 +336,51 @@ def _business_key(data: dict[str, Any], supplier_id: uuid.UUID) -> str | None:
         "invoice_year": year,
     }
     return canonical_hash(canonical)
+
+
+def _include_normalization_issues(
+    result: dict[str, Any], evidence: list[ExtractionEvidence]
+) -> dict[str, Any]:
+    issues = [
+        {"code": item.normalization_issue, "severity": "BLOCK", "field_path": item.field_path}
+        for item in sorted(evidence, key=lambda row: row.field_path)
+        if item.normalization_issue
+    ]
+    if issues:
+        existing = {
+            (issue.get("code"), issue.get("field_path"))
+            for issue in result["issues"]
+        }
+        result["issues"].extend(
+            issue for issue in issues if (issue["code"], issue["field_path"]) not in existing
+        )
+        if any(issue.get("severity") == "BLOCK" for issue in result["issues"]):
+            result["status"] = "BLOCKED"
+    return result
+
+
+def _include_page_provenance_issues(
+    result: dict[str, Any],
+    missing_page_paths: set[str],
+    invalid_page_paths: set[str],
+) -> dict[str, Any]:
+    issues = [
+        *(
+            {"code": "SOURCE_PAGE_MISSING", "severity": "BLOCK", "field_path": path}
+            for path in sorted(missing_page_paths)
+        ),
+        *(
+            {"code": "SOURCE_PAGE_INVALID", "severity": "BLOCK", "field_path": path}
+            for path in sorted(invalid_page_paths)
+        ),
+    ]
+    existing = {(issue.get("code"), issue.get("field_path")) for issue in result["issues"]}
+    result["issues"].extend(
+        issue for issue in issues if (issue["code"], issue["field_path"]) not in existing
+    )
+    if issues:
+        result["status"] = "BLOCKED"
+    return result
 
 
 def _pending_duplicate(
@@ -389,7 +513,29 @@ def create_reconciliation(
             ExtractionEvidence.version_id == version.id,
         )
     ).all()
-    unverified = any(item.verification_state != "TEXT_VERIFIED" for item in evidence)
+    evidence_by_path = {item.field_path: item for item in evidence}
+    document = db.scalar(
+        select(Document).where(Document.org_id == actor.org_id, Document.id == invoice.document_id)
+    )
+    page_count = document.pages if document is not None else 0
+    expected_source_paths = {
+        path
+        for path, value in _leaf_fields(invoice_data).items()
+        if value is not None and not isinstance(value, bool)
+    }
+    missing_page_paths: set[str] = set()
+    invalid_page_paths: set[str] = set()
+    for path in expected_source_paths:
+        item = evidence_by_path.get(path)
+        if item is None or item.page_no is None:
+            missing_page_paths.add(path)
+        elif not 1 <= item.page_no <= page_count:
+            invalid_page_paths.add(path)
+    unverified = (
+        any(item.verification_state != "TEXT_VERIFIED" for item in evidence)
+        or bool(missing_page_paths)
+        or bool(invalid_page_paths)
+    )
     result = reconcile(
         invoice_data,
         po_view,
@@ -398,6 +544,8 @@ def create_reconciliation(
         duplicate_pending=duplicate_pending,
         has_unverified_source=unverified,
     )
+    result = _include_normalization_issues(result, evidence)
+    result = _include_page_provenance_issues(result, missing_page_paths, invalid_page_paths)
     snapshot = {
         "invoice_version_id": str(version.id),
         "invoice_snapshot_hash": version.snapshot_hash,
@@ -673,6 +821,27 @@ def invoice_summary(db: Session, invoice: Invoice) -> dict[str, Any]:
     }
 
 
+def _evidence_response(item: ExtractionEvidence) -> dict[str, Any]:
+    return EvidenceResponse(
+        field_path=item.field_path,
+        page_no=item.page_no,
+        raw_value=item.raw_value,
+        normalized_value=item.normalized_value,
+        raw_text=item.raw_text,
+        bbox=item.bbox,
+        confidence=item.confidence,
+        normalization_issue=item.normalization_issue,
+        origin=item.origin,
+        verification_state=getattr(
+            item,
+            "provenance_state",
+            "MISSING_PROVENANCE" if item.page_no is None else item.verification_state,
+        ),
+        actor_id=item.actor_id,
+        note=item.note,
+    ).model_dump(mode="json")
+
+
 def get_invoice_list(db: Session, org_id: uuid.UUID, limit: int = 100) -> list[dict[str, Any]]:
     rows = db.scalars(
         select(Invoice).where(Invoice.org_id == org_id).order_by(Invoice.created_at.desc()).limit(limit)
@@ -774,20 +943,7 @@ def get_invoice_detail_for_org(
         if version
         else None
     )
-    summary["evidence"] = [
-        {
-            "field_path": e.field_path,
-            "page_no": e.page_no,
-            "raw_value": e.raw_value,
-            "normalized_value": e.normalized_value,
-            "raw_text": e.raw_text,
-            "origin": e.origin,
-            "verification_state": e.verification_state,
-            "actor_id": str(e.actor_id) if e.actor_id else None,
-            "note": e.note,
-        }
-        for e in evidence
-    ]
+    summary["evidence"] = [_evidence_response(item) for item in evidence]
     summary["reconciliation"] = (
         {
             "id": str(reconciliation.id),

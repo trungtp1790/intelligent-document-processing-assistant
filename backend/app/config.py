@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     foundry_read_timeout_seconds: int = 180
     foundry_max_output_tokens: int = 4096
     foundry_temperature: float = 0.0
+    document_intelligence_endpoint: str = ""
+    document_intelligence_api_key: str = ""
+    document_intelligence_connect_timeout_seconds: int = 10
+    document_intelligence_read_timeout_seconds: int = 180
     extraction_job_deadline_seconds: int = 600
     extraction_prompt_version: str = "invoice-v1"
     workflow_engine: str = "langgraph"
@@ -113,6 +117,8 @@ def validate_runtime_settings(config: Settings | None = None) -> None:
             active.foundry_connect_timeout_seconds,
             active.foundry_read_timeout_seconds,
             active.foundry_max_output_tokens,
+            active.document_intelligence_connect_timeout_seconds,
+            active.document_intelligence_read_timeout_seconds,
             active.extraction_job_deadline_seconds,
             active.copilot_timeout_seconds,
             active.copilot_max_output_tokens,
@@ -134,7 +140,7 @@ def validate_runtime_settings(config: Settings | None = None) -> None:
             raise RuntimeError("S3_BUCKET and AWS_REGION must contain provisioned values in production")
         if active.s3_server_side_encryption == "aws:kms" and _is_placeholder(active.s3_kms_key_id):
             raise RuntimeError("S3_KMS_KEY_ID must contain a provisioned KMS key in production")
-        if active.extraction_provider not in {"bedrock", "foundry"}:
+        if active.extraction_provider not in {"bedrock", "foundry", "azure_document_intelligence"}:
             raise RuntimeError("Production requires a configured live extraction provider")
         if not active.allow_live_model_calls:
             raise RuntimeError("Production requires explicit ALLOW_LIVE_MODEL_CALLS=true")
@@ -198,6 +204,30 @@ def validate_runtime_settings(config: Settings | None = None) -> None:
             )
         if not 0 <= active.foundry_temperature <= 2:
             raise RuntimeError("FOUNDRY_TEMPERATURE must be between 0 and 2")
+    if active.extraction_provider == "azure_document_intelligence":
+        if not active.allow_live_model_calls:
+            raise RuntimeError(
+                "Set ALLOW_LIVE_MODEL_CALLS=true before enabling Azure Document Intelligence extraction"
+            )
+        endpoint = active.document_intelligence_endpoint.strip()
+        try:
+            parsed = urlsplit(endpoint)
+            _ = parsed.port
+        except ValueError:
+            parsed = None
+        if (
+            parsed is None
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeError("DOCUMENT_INTELLIGENCE_ENDPOINT must be an HTTPS resource endpoint")
+        if active.app_env == "production" and _is_example_host(parsed.hostname):
+            raise RuntimeError("DOCUMENT_INTELLIGENCE_ENDPOINT must use the provisioned Azure resource")
     if active.copilot_provider not in {"disabled", "foundry"}:
         raise RuntimeError("COPILOT_PROVIDER must be 'disabled' or 'foundry'")
     if active.copilot_provider == "foundry":

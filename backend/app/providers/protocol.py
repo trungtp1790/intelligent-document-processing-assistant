@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -25,6 +27,8 @@ class ExtractionRequest:
     run_id: str | None = None
     routing_reason: str = ""
     deadline_seconds_remaining: float | None = None
+    # Only the explicitly selected native-document provider receives the original upload.
+    document_bytes: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -44,10 +48,37 @@ class ExtractionResult:
     candidate: dict[str, Any]
     evidence_texts: dict[str, str]
     raw_output_ref: str | None
-    evidence_pages: dict[str, int] = field(default_factory=dict)
+    evidence_pages: dict[str, int | None] = field(default_factory=dict)
+    evidence_bboxes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    evidence_confidences: dict[str, float] = field(default_factory=dict)
     usage: dict[str, Any] = field(default_factory=dict)
     strategy: str = "fixture_manifest"
     raw_output: str | None = None
+
+
+def validate_confidence(value: Any) -> float | None:
+    """Validate an actual provider score; this function never derives or estimates one."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("Provider confidence must be a number")
+    score = float(value)
+    if not math.isfinite(score) or not 0 <= score <= 1:
+        raise ValueError("Provider confidence must be finite and between zero and one")
+    return score
+
+
+def validate_bounding_region(value: Any) -> dict[str, Any] | None:
+    """Accept only a provider-supplied JSON object; coordinates are not inferred here."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not value:
+        raise ValueError("Provider bounding region must be a non-empty object")
+    try:
+        json.dumps(value, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Provider bounding region must contain finite JSON values") from exc
+    return value
 
 
 ReserveInvocation = Callable[[str, str], str]

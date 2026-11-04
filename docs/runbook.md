@@ -77,6 +77,48 @@ python scripts/evaluate_ai_corpus.py --split validation --live
 
 Foundry provider-call rows use the existing PostgreSQL usage table, so this adapter adds no migration. The live state remains `LIVE_PENDING` until an actual credentialed validation run is performed and its report is inspected.
 
+## Azure Document Intelligence (M2)
+
+The default remains `EXTRACTION_PROVIDER=fixture`; it is offline, requires no cloud credentials, and accepts only the listed synthetic samples. Azure is enabled only by explicitly selecting `EXTRACTION_PROVIDER=azure_document_intelligence` with `ALLOW_LIVE_MODEL_CALLS=true`. Set `DOCUMENT_INTELLIGENCE_ENDPOINT` to the HTTPS resource root. Use `DOCUMENT_INTELLIGENCE_API_KEY` for key authentication or leave it empty to use `DefaultAzureCredential` from the runtime identity chain. Never place a key in source control or a command line.
+
+The adapter pins `azure-ai-documentintelligence==1.0.2`, API `2024-11-30`, and `prebuilt-invoice`. It sends original PDF, PNG, or JPEG bytes and enforces the app's 10-page, 15 MiB limits. `DOCUMENT_INTELLIGENCE_CONNECT_TIMEOUT_SECONDS` and `DOCUMENT_INTELLIGENCE_READ_TIMEOUT_SECONDS` bound requests within the extraction job deadline. Retries are disabled at the SDK request layer so each recorded attempt is explicit; the existing worker retry policy remains authoritative. A provider failure is surfaced as a typed error and never switches to fixtures, Bedrock, or Foundry.
+
+The adapter retains Azure field `content` as raw text; application normalization creates a separate normalized value. Only returned page, bounding-region, and confidence metadata is persisted. Missing page provenance stays `MISSING_PROVENANCE` and requires reviewer attestation before approval. Azure returns no token usage in this contract, so token counts and cost remain unknown; the app records measured call latency and invocation status. No database migration is needed because Azure uses the existing extraction evidence and provider-call schema. Local fake-client contract tests do not verify service behavior. Azure remains `LIVE_PENDING` until an authorized credentialed request has been reviewed.
+
+### Offline evaluator plumbing smoke
+
+The offline CLI smoke uses only a manifest and PDF generated in the test's temporary directory. It exercises fixture hash lookup, the production extraction request routing, invoice schema validation, and deterministic invoice-to-PO rules. It reports fixture pipeline latency, but AI accuracy, model latency, tokens, and cost are not measured. The report labels the provider `fixture/offline`; it is not Azure accuracy evidence and does not overwrite the AI corpus reports.
+
+```powershell
+python -m pytest backend/tests/unit/test_ai_corpus_evaluation.py -k "evaluator_cli_runs_fixture_pipeline or cli_preflight_stops_before_provider"
+python scripts/evaluate_ai_corpus.py --preflight-only
+python scripts/evaluate_ai_corpus.py --preflight-only --live
+```
+
+The preflight-only commands load no manifest and construct no provider/client. A blocked result is expected when `--live` is missing or `ALLOW_LIVE_MODEL_CALLS` is false. The fixture smoke mode requires explicit `--manifest` and new `--report` paths and cannot be combined with `--live`.
+
+### Azure AI corpus evaluation — prepare for a later live run
+
+The evaluator uses the same Azure provider contract and the same frozen labels/splits as the other providers. Offline/test runs keep fixture as the default and do not create an Azure SDK client. A live run is blocked unless `--live`, `ALLOW_LIVE_MODEL_CALLS=true`, the Azure provider selection, a valid HTTPS resource endpoint, and the pinned `azure-ai-documentintelligence==1.0.2` SDK are present. Do not run this command until a live validation is explicitly approved; it sends the synthetic validation PDFs to Azure and may incur charges.
+
+Configure these locally; the angle-bracket values below are placeholders, not credentials:
+
+```dotenv
+EXTRACTION_PROVIDER=azure_document_intelligence
+ALLOW_LIVE_MODEL_CALLS=true
+DOCUMENT_INTELLIGENCE_ENDPOINT=<HTTPS resource endpoint>
+DOCUMENT_INTELLIGENCE_API_KEY=<secret from local secret storage, only when using key auth>
+```
+
+Then use a unique report name so prior reports are preserved:
+
+```powershell
+$report = "evals/reports/azure_validation_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+python scripts/evaluate_ai_corpus.py --split validation --live --report $report
+```
+
+The report records the selected provider, pinned/installed SDK version, REST API version, model ID, sample and attempt counts, and measured successful-call latency. Azure does not return token usage, cost, or an immutable prebuilt model build in this contract, so those fields remain null. The response from a fake client is test plumbing only and is never used to measure Azure accuracy. Keep the live status `LIVE_PENDING` until this command has been run with authorized credentials and its real report reviewed.
+
 ## Policy guidance lookup (M5b)
 
 Migration 0004 adds organization-scoped, append-only policy source versions and page-level passages, plus a GIN full-text index. After upgrading, run the seed command to ingest seven synthetic demo sources for both demo organizations. Commands: docker compose exec -T api alembic upgrade head; docker compose exec -T api python -m app.seed; docker compose exec -T api alembic current.

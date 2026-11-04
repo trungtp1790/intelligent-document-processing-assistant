@@ -307,6 +307,9 @@ code { font-family: var(--mono); font-size: .92em; }
 .viewer-disclaimer { margin: 0; padding: 9px 13px; border-top: 1px solid #e9ede9; color: var(--muted); font-size: 10px; }
 .source-note { display: grid; gap: 5px; padding: 10px 13px; border-top: 1px solid #e5ddc6; background: #f8f6ed; color: #655b3d; font-size: 10px; }
 .source-note small { overflow-wrap: anywhere; color: #77704f; font-family: var(--mono); font-size: 10px; line-height: 1.5; }
+.source-page-attestation { display: grid; gap: 6px; margin-top: 8px; }
+.source-page-attestation > label:first-child { color: var(--ink); font-size: 11px; font-weight: 600; }
+.source-page-attestation > input { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 3px; background: #fff; color: var(--ink); font: inherit; }
 .review-panel > .field-grid { margin-top: 15px; }
 .field-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .field-control > span { display: flex; align-items: center; justify-content: space-between; gap: 4px; }

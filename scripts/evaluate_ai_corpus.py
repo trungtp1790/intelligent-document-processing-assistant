@@ -11,6 +11,7 @@ import uuid
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from statistics import median
 from types import SimpleNamespace
@@ -21,12 +22,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend" if (ROOT / "backend").is_dir() else ROOT))
 
 from app.config import settings  # noqa: E402
+from app.domain.errors import DomainError  # noqa: E402
 from app.documents.validation import validate_document  # noqa: E402
 from app.domain.reconciliation import POLICY_VERSION, reconcile  # noqa: E402
+from app.providers.azure_document_intelligence import (  # noqa: E402
+    AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
+    AZURE_DOCUMENT_INTELLIGENCE_MODEL,
+    AZURE_DOCUMENT_INTELLIGENCE_SDK_VERSION,
+    AzureDocumentIntelligenceProvider,
+)
 from app.providers.errors import ProviderFailure  # noqa: E402
+from app.providers.fixture import FixtureProvider  # noqa: E402
 from app.providers.factory import configured_provider  # noqa: E402
 from app.services.extraction import _make_request, _normalized_text, _pdf_text_pages  # noqa: E402
-from app.schemas import InvoiceData  # noqa: E402
+from app.schemas import InvoiceData, POCreate  # noqa: E402
 
 DEFAULT_MANIFEST = ROOT / "evals" / "datasets" / "synthetic_invoice_corpus_v1" / "manifest.json"
 HEADER_FIELDS = (
@@ -65,6 +74,37 @@ def _git_sha() -> str | None:
         ).strip()
     except (FileNotFoundError, subprocess.CalledProcessError):
         return None
+
+
+def _installed_azure_sdk_version() -> str | None:
+    """Read local package metadata only; this must never initialize an Azure client."""
+    try:
+        return package_version("azure-ai-documentintelligence")
+    except PackageNotFoundError:
+        return None
+
+
+def _provider_versions(provider: Any) -> dict[str, str | None]:
+    if settings.extraction_provider != "azure_document_intelligence":
+        return {
+            "sdk_name": None,
+            "sdk_version": None,
+            "sdk_required_version": None,
+            "api_version": None,
+            "model_id": provider.capabilities().model_id,
+            "model_version": None,
+            "model_version_reason": None,
+        }
+    return {
+        "sdk_name": "azure-ai-documentintelligence",
+        "sdk_version": _installed_azure_sdk_version(),
+        "sdk_required_version": AZURE_DOCUMENT_INTELLIGENCE_SDK_VERSION,
+        "api_version": AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
+        "model_id": provider.capabilities().model_id or AZURE_DOCUMENT_INTELLIGENCE_MODEL,
+        # Azure's prebuilt response does not identify an immutable service build.
+        "model_version": None,
+        "model_version_reason": "The provider response does not expose an immutable prebuilt model build.",
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -453,9 +493,303 @@ def _live_block_code(args: argparse.Namespace) -> str | None:
         not settings.foundry_model_endpoint or not settings.foundry_deployment
     ):
         return "PROVIDER_NOT_CONFIGURED"
+    if settings.extraction_provider == "azure_document_intelligence":
+        try:
+            AzureDocumentIntelligenceProvider._validate_endpoint(
+                settings.document_intelligence_endpoint
+            )
+        except ProviderFailure:
+            return "PROVIDER_NOT_CONFIGURED"
+        installed_version = _installed_azure_sdk_version()
+        if installed_version is None:
+            return "PROVIDER_SDK_UNAVAILABLE"
+        if installed_version != AZURE_DOCUMENT_INTELLIGENCE_SDK_VERSION:
+            return "PROVIDER_SDK_VERSION_MISMATCH"
+        return None
     if settings.extraction_provider not in {"bedrock", "foundry"}:
         return "EXTRACTION_PROVIDER_NOT_LIVE_MODEL"
     return None
+
+
+def _validate_offline_fixture_manifest(
+    manifest_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]], bytes]:
+    """Validate a small, explicitly synthetic manifest without touching the AI corpus."""
+    manifest_path = manifest_path.resolve(strict=True)
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    if not isinstance(manifest, dict):
+        raise ValueError("offline fixture manifest must be an object")
+    if (
+        manifest.get("dataset_type") != "fixture_offline_pipeline_smoke"
+        or manifest.get("synthetic_only") is not True
+        or manifest.get("accuracy_eligible") is not False
+    ):
+        raise ValueError("offline smoke accepts only synthetic, non-accuracy fixture manifests")
+    dataset_id = manifest.get("dataset_id")
+    if not isinstance(dataset_id, str) or not dataset_id.strip():
+        raise ValueError("offline fixture manifest requires a dataset_id")
+    rows = manifest.get("samples")
+    fixtures = manifest.get("fixtures")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 20:
+        raise ValueError("offline fixture manifest must contain between 1 and 20 samples")
+    if not isinstance(fixtures, list):
+        raise ValueError("offline fixture manifest requires a fixtures list")
+
+    fixture_by_hash: dict[str, dict[str, Any]] = {}
+    for fixture in fixtures:
+        if not isinstance(fixture, dict):
+            raise ValueError("offline fixture entries must be objects")
+        digest = fixture.get("sha256")
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest.casefold())
+            or digest in fixture_by_hash
+            or fixture.get("synthetic") is not True
+        ):
+            raise ValueError("offline fixture entry has an invalid or duplicate synthetic SHA-256")
+        InvoiceData.model_validate(fixture.get("extraction"))
+        fixture_by_hash[digest] = fixture
+
+    sample_ids: set[str] = set()
+    sample_hashes: set[str] = set()
+    validated_rows: list[dict[str, Any]] = []
+    for original in rows:
+        if not isinstance(original, dict):
+            raise ValueError("offline fixture samples must be objects")
+        row = dict(original)
+        sample_id = row.get("sample_id")
+        digest = row.get("sha256")
+        if (
+            not isinstance(sample_id, str)
+            or not sample_id.strip()
+            or sample_id in sample_ids
+            or not isinstance(digest, str)
+            or digest not in fixture_by_hash
+            or digest in sample_hashes
+        ):
+            raise ValueError("offline fixture sample has a missing or duplicate id/hash")
+        if (
+            row.get("synthetic") is not True
+            or row.get("label_status") != "test_generated"
+            or "manual_correction" in row
+            or "post_manual_extraction" in row
+        ):
+            raise ValueError(f"offline fixture sample is not explicitly test-generated: {sample_id}")
+        if row.get("language") not in {"vi-VN", "en-US"}:
+            raise ValueError(f"offline fixture sample has an unsupported language: {sample_id}")
+        if row.get("modality") not in {"native_pdf_text", "scanned_pdf"}:
+            raise ValueError(f"offline fixture sample has an unsupported modality: {sample_id}")
+        page_count = row.get("page_count")
+        if type(page_count) is not int or page_count < 1:
+            raise ValueError(f"offline fixture sample has an invalid page count: {sample_id}")
+
+        sample_path = _resolved_sample_path(manifest_path, row)
+        if not sample_path.is_file() or sample_path.suffix.casefold() != ".pdf":
+            raise ValueError(f"offline fixture sample must reference a generated PDF: {sample_id}")
+        content = sample_path.read_bytes()
+        if _sha256(sample_path) != digest:
+            raise ValueError(f"offline fixture PDF hash mismatch: {sample_id}")
+        validated = validate_document(content)
+        if validated.mime != "application/pdf" or validated.page_count != page_count:
+            raise ValueError(f"offline fixture PDF metadata mismatch: {sample_id}")
+
+        labels = InvoiceData.model_validate(row.get("labels")).model_dump(mode="json")
+        purchase_order = POCreate.model_validate(row.get("po_reference")).model_dump(mode="json")
+        expected_findings = row.get("expected_findings")
+        if not isinstance(expected_findings, list) or any(
+            not isinstance(code, str) for code in expected_findings
+        ):
+            raise ValueError(f"offline fixture sample has invalid expected findings: {sample_id}")
+        row["labels"] = labels
+        row["po_reference"] = purchase_order
+        row["_validated_path"] = sample_path
+        row["_validated_content"] = content
+        sample_ids.add(sample_id)
+        sample_hashes.add(digest)
+        validated_rows.append(row)
+
+    if set(fixture_by_hash) != sample_hashes:
+        raise ValueError("offline fixture manifest must bind exactly one fixture to every sample")
+    return manifest, validated_rows, manifest_bytes
+
+
+def evaluate_offline_fixture_smoke(*, manifest_path: Path, report_path: Path) -> dict[str, Any]:
+    """Run fixture extraction and deterministic reconciliation on test-generated documents only."""
+    if settings.extraction_provider != "fixture":
+        raise ValueError("offline fixture smoke requires EXTRACTION_PROVIDER=fixture")
+    manifest, selected, manifest_bytes = _validate_offline_fixture_manifest(manifest_path)
+    report_path = report_path.resolve()
+    protected_paths = {
+        manifest_path.resolve(),
+        *(row["_validated_path"].resolve() for row in selected),
+    }
+    if report_path in protected_paths or report_path.exists():
+        raise ValueError("offline fixture report path must be new and separate from its inputs")
+
+    provider = FixtureProvider(manifest_path.resolve())
+    outcomes: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    schema_valid_count = 0
+    rule_regression_passed = 0
+    fixture_invocations = 0
+    fixture_model_calls = 0
+    fixture_model_calls_known = True
+    fixture_latencies: list[float] = []
+    started = time.perf_counter()
+
+    for row in selected:
+        sample_id = row["sample_id"]
+        sample_started = time.perf_counter()
+        fixture_invocations += 1
+        try:
+            document = SimpleNamespace(
+                id=uuid.uuid5(uuid.NAMESPACE_URL, f"{manifest['dataset_id']}:{sample_id}"),
+                sha256=row["sha256"],
+                mime="application/pdf",
+                bytes=len(row["_validated_content"]),
+                pages=row["page_count"],
+            )
+            request, _page_text = _make_request(
+                document,
+                row["_validated_content"],
+                uuid.uuid5(uuid.NAMESPACE_URL, f"fixture-smoke:{sample_id}"),
+                row["language"],
+                provider,
+                datetime.now(UTC) + timedelta(seconds=settings.extraction_job_deadline_seconds),
+            )
+            result = provider.extract_invoice(request)
+            candidate = InvoiceData.model_validate(result.candidate).model_dump(mode="json")
+            schema_valid_count += 1
+            usage = result.usage if isinstance(result.usage, dict) else {}
+            reported_model_calls = usage.get("model_calls")
+            if type(reported_model_calls) is int and reported_model_calls >= 0:
+                fixture_model_calls += reported_model_calls
+            else:
+                fixture_model_calls_known = False
+
+            expected_findings = sorted(set(row["expected_findings"]))
+            label_rule = _reconcile_labels(row["labels"], row["po_reference"])
+            candidate_rule = _reconcile_labels(candidate, row["po_reference"])
+            label_findings = sorted({issue["code"] for issue in label_rule["issues"]})
+            candidate_findings = sorted({issue["code"] for issue in candidate_rule["issues"]})
+            rule_passed = label_findings == expected_findings and candidate_findings == expected_findings
+            rule_regression_passed += int(rule_passed)
+            latency_ms = round((time.perf_counter() - sample_started) * 1000, 2)
+            fixture_latencies.append(latency_ms)
+            outcomes.append(
+                {
+                    "sample_id": sample_id,
+                    "status": "SUCCEEDED",
+                    "routing_reason": request.routing_reason,
+                    "fixture_pipeline_latency_ms": latency_ms,
+                    "fixture_result_schema_valid": True,
+                    "synthetic_rule_regression_passed": rule_passed,
+                    "expected_findings": expected_findings,
+                    "candidate_findings": candidate_findings,
+                }
+            )
+        except (ProviderFailure, DomainError) as exc:
+            latency_ms = round((time.perf_counter() - sample_started) * 1000, 2)
+            fixture_latencies.append(latency_ms)
+            failures.append({"sample_id": sample_id, "code": exc.code})
+            outcomes.append(
+                {
+                    "sample_id": sample_id,
+                    "status": "FAILED",
+                    "fixture_pipeline_latency_ms": latency_ms,
+                    "failure_code": exc.code,
+                }
+            )
+        except (ValueError, TypeError):
+            latency_ms = round((time.perf_counter() - sample_started) * 1000, 2)
+            fixture_latencies.append(latency_ms)
+            failures.append({"sample_id": sample_id, "code": "FIXTURE_OUTPUT_INVALID"})
+            outcomes.append(
+                {
+                    "sample_id": sample_id,
+                    "status": "FAILED",
+                    "fixture_pipeline_latency_ms": latency_ms,
+                    "failure_code": "FIXTURE_OUTPUT_INVALID",
+                }
+            )
+
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+    completed = sum(outcome["status"] == "SUCCEEDED" for outcome in outcomes)
+    report = {
+        "report_schema_version": "1.0",
+        "evaluation_type": "fixture_offline_pipeline_smoke",
+        "classification": "SYNTHETIC_FIXTURE_PLUMBING_ONLY",
+        "accuracy_status": "NOT_MEASURED",
+        "sample_count": len(selected),
+        "processed_sample_count": len(outcomes),
+        "completed_sample_count": completed,
+        "failure_count": len(failures),
+        "provider": {
+            "name": "fixture",
+            "mode": "offline",
+            "sdk_name": None,
+            "sdk_version": None,
+            "api_version": None,
+            "model_id": None,
+            "model_version": None,
+        },
+        "dataset": {
+            "dataset_id": manifest["dataset_id"],
+            "synthetic_only": True,
+            "accuracy_eligible": False,
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        },
+        "metrics": {
+            "ai_accuracy": {"status": "NOT_MEASURED", "value": None, "numerator": None, "denominator": 0},
+            "fixture_result_schema_validity": {
+                "valid_count": schema_valid_count,
+                "denominator": len(selected),
+                "rate": _ratio(schema_valid_count, len(selected)),
+            },
+            "synthetic_rule_regression": {
+                "passed_count": rule_regression_passed,
+                "denominator": len(selected),
+                "pass_rate": _ratio(rule_regression_passed, len(selected)),
+                "ai_accuracy_included": False,
+            },
+        },
+        "configuration": {
+            "requested_provider": "fixture",
+            "execution_mode": "offline",
+            "live_model_calls_requested": False,
+            "fixture_accuracy_included": False,
+            "azure_live_status": "LIVE_PENDING",
+        },
+        "runtime": {
+            "runner_elapsed_ms": elapsed_ms,
+            "fixture_pipeline_latency_median_ms": median(fixture_latencies) if fixture_latencies else None,
+            "model_latency_median_ms": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "provider_usage_status": "MODEL_NOT_USED",
+            "model_calls": fixture_model_calls if fixture_model_calls_known else None,
+            "provider_invocations": fixture_invocations,
+            "cost_usd": None,
+            "cost_usd_source": None,
+        },
+        "error_analysis": {
+            "failure_counts": dict(sorted(Counter(item["code"] for item in failures).items())),
+            "samples": failures,
+        },
+        "samples": outcomes,
+        "private_predictions_ref": None,
+        "limitations": [
+            "This report verifies offline fixture plumbing using test-generated synthetic documents only.",
+            "Fixture outputs and fixture metrics are not Azure accuracy or provider performance evidence.",
+            "No Azure client, external API, database, or model was used in this run.",
+        ],
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with report_path.open("x", encoding="utf-8") as output:
+        output.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    return report
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -483,8 +817,8 @@ def evaluate(
     private_dir = ROOT / "var" / "eval_predictions"
     private_dir.mkdir(parents=True, exist_ok=True)
     private_path = private_dir / f"{run_id}.jsonl"
-    provider = configured_provider()
     blocker = _live_block_code(argparse.Namespace(live=live))
+    provider = configured_provider()
 
     outcomes: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
@@ -494,7 +828,11 @@ def evaluate(
     routing_counts: Counter[str] = Counter()
     input_tokens = output_tokens = 0
     token_input_known = token_output_known = False
+    provider_cost_usd = Decimal("0")
+    provider_cost_known = False
+    provider_call_usage_known = False
     model_calls = 0
+    provider_invocations = 0
     model_input_attempts = 0
     output_count = 0
     schema_valid_count = 0
@@ -563,13 +901,14 @@ def evaluate(
                         "status": "BLOCKED",
                         "failure_code": failure.code,
                         "retryable": failure.retryable,
-                        "latency_ms": round((time.perf_counter() - sample_start) * 1000, 2),
+                        "latency_ms": None,
                     }
                 )
                 continue
 
-            model_calls += 1
+            provider_invocations += 1
             model_input_attempts += 1
+            model_calls += 1
             try:
                 result = provider.extract_invoice(extraction_request)
                 latency_ms = round((time.perf_counter() - sample_start) * 1000, 2)
@@ -577,13 +916,27 @@ def evaluate(
                 output_count += 1
                 schema_valid_count += 1
                 usage = result.usage
-                if isinstance(usage.get("input_tokens"), int):
+                if type(usage.get("input_tokens")) is int and usage["input_tokens"] >= 0:
                     input_tokens += usage["input_tokens"]
                     token_input_known = True
-                if isinstance(usage.get("output_tokens"), int):
+                if type(usage.get("output_tokens")) is int and usage["output_tokens"] >= 0:
                     output_tokens += usage["output_tokens"]
                     token_output_known = True
-                model_calls += int(usage.get("model_calls", 0)) - 1
+                raw_cost = usage.get("cost_usd")
+                if raw_cost is not None and not isinstance(raw_cost, bool):
+                    try:
+                        parsed_cost = Decimal(str(raw_cost))
+                    except InvalidOperation:
+                        parsed_cost = Decimal("NaN")
+                    if parsed_cost.is_finite() and parsed_cost >= 0:
+                        provider_cost_usd += parsed_cost
+                        provider_cost_known = True
+                reported_model_calls = usage.get("model_calls")
+                if type(reported_model_calls) is int and reported_model_calls >= 0:
+                    model_calls += reported_model_calls - 1
+                    provider_call_usage_known = True
+                elif settings.extraction_provider != "azure_document_intelligence":
+                    model_calls -= 1
                 scores = _score_prediction(row, result, page_text)
                 header_correct += scores["header"]["correct"]
                 header_total += scores["header"]["total"]
@@ -702,6 +1055,31 @@ def evaluate(
     split_policy = manifest["split_policy"]
     family_counts = Counter(row["layout_family"] for row in selected)
     lock_path = ROOT / "backend" / "requirements.lock"
+    selected_provider_versions = _provider_versions(provider)
+    if settings.extraction_provider == "azure_document_intelligence":
+        configured_connect_timeout = settings.document_intelligence_connect_timeout_seconds
+        configured_read_timeout = settings.document_intelligence_read_timeout_seconds
+        configured_max_output_tokens = None
+        configured_temperature = None
+        configured_prompt_version = None
+    elif settings.extraction_provider == "foundry":
+        configured_connect_timeout = settings.foundry_connect_timeout_seconds
+        configured_read_timeout = settings.foundry_read_timeout_seconds
+        configured_max_output_tokens = settings.foundry_max_output_tokens
+        configured_temperature = settings.foundry_temperature
+        configured_prompt_version = settings.extraction_prompt_version
+    elif settings.extraction_provider == "bedrock":
+        configured_connect_timeout = settings.bedrock_connect_timeout_seconds
+        configured_read_timeout = settings.bedrock_read_timeout_seconds
+        configured_max_output_tokens = settings.bedrock_max_output_tokens
+        configured_temperature = 0
+        configured_prompt_version = settings.extraction_prompt_version
+    else:
+        configured_connect_timeout = None
+        configured_read_timeout = None
+        configured_max_output_tokens = None
+        configured_temperature = None
+        configured_prompt_version = None
     report = {
         "report_version": "1.0",
         "evaluation_type": "ai_extraction_evaluation",
@@ -750,7 +1128,9 @@ def evaluate(
         "provider_failure_count": failed_count,
         "preflight_blocked_count": blocked_count,
         "model_input_attempted_sample_count": model_input_attempts,
-        "live_model_requests_started": model_calls,
+        "live_model_requests_started": provider_invocations
+        if settings.extraction_provider == "azure_document_intelligence"
+        else model_calls,
         "model_output_count": output_count,
         "schema_valid_count": schema_valid_count,
         "schema_valid_denominator": model_input_attempts,
@@ -792,6 +1172,7 @@ def evaluate(
             "requested_provider": settings.extraction_provider,
             "application_extraction_provider": settings.extraction_provider,
             "model_id": provider.capabilities().model_id,
+            "provider_versions": selected_provider_versions,
             "region": settings.aws_region or None if settings.extraction_provider == "bedrock" else None,
             "foundry_endpoint": settings.foundry_model_endpoint or None
             if settings.extraction_provider == "foundry"
@@ -799,23 +1180,21 @@ def evaluate(
             "live_flag_requested": live,
             "allow_live_model_calls": settings.allow_live_model_calls,
             "live_preflight_block_code": blocker,
-            "prompt_version": settings.extraction_prompt_version,
+            "prompt_version": configured_prompt_version,
             "schema_version": "1.0",
             "reconciliation_policy_version": POLICY_VERSION,
-            "temperature": settings.foundry_temperature if settings.extraction_provider == "foundry" else 0,
-            "max_output_tokens": settings.foundry_max_output_tokens
-            if settings.extraction_provider == "foundry"
-            else settings.bedrock_max_output_tokens,
-            "connect_timeout_seconds": settings.foundry_connect_timeout_seconds
-            if settings.extraction_provider == "foundry"
-            else settings.bedrock_connect_timeout_seconds,
-            "read_timeout_seconds": settings.foundry_read_timeout_seconds
-            if settings.extraction_provider == "foundry"
-            else settings.bedrock_read_timeout_seconds,
+            "temperature": configured_temperature,
+            "max_output_tokens": configured_max_output_tokens,
+            "connect_timeout_seconds": configured_connect_timeout,
+            "read_timeout_seconds": configured_read_timeout,
             "job_deadline_seconds": settings.extraction_job_deadline_seconds,
             "retry_policy": "one attempt per sample; no automatic eval reruns",
             "pricing": None,
-            "pricing_unknown_reason": "No versioned pricing configuration is present.",
+            "pricing_unknown_reason": (
+                "No versioned pricing table is available; cost is provider-reported."
+                if provider_cost_known
+                else "Provider did not report cost and no versioned pricing configuration is available."
+            ),
         },
         "runtime": {
             "runner_elapsed_ms": elapsed_ms,
@@ -823,7 +1202,15 @@ def evaluate(
             "model_latency_p95_ms": _percentile95(response_latencies),
             "input_tokens": input_tokens if token_input_known else None,
             "output_tokens": output_tokens if token_output_known else None,
-            "model_calls": model_calls,
+            "provider_usage_status": "REPORTED"
+            if token_input_known or token_output_known or provider_cost_known or provider_call_usage_known
+            else "NOT_REPORTED",
+            "cost_usd": float(provider_cost_usd) if provider_cost_known else None,
+            "cost_usd_source": "provider_response" if provider_cost_known else None,
+            "model_calls": None
+            if settings.extraction_provider == "azure_document_intelligence" and not provider_call_usage_known
+            else model_calls,
+            "provider_invocations": provider_invocations,
             "routing_counts": dict(sorted(routing_counts.items())),
         },
         "error_analysis": {
@@ -860,7 +1247,8 @@ def evaluate(
             "This AI corpus is synthetic and its programmatic reference labels are not human annotated.",
             "Synthetic-corpus accuracy is not a claim about real invoices or production performance.",
             "Fixture/demo regression results are excluded from all AI accuracy metrics.",
-            "A live accuracy run requires explicit CLI opt-in and Bedrock or Foundry runtime configuration.",
+            "A live accuracy run requires explicit CLI opt-in, live-call opt-in, and complete selected-provider configuration.",
+            "Azure prebuilt invoice does not report an immutable service model build or token/cost usage in this contract; those fields remain null unless returned by the provider.",
         ],
     }
 
@@ -872,8 +1260,19 @@ def evaluate(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate a live extraction provider on the labeled AI corpus.")
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser = argparse.ArgumentParser(description="Evaluate extraction providers or run an offline fixture smoke.")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--offline-fixture-smoke",
+        action="store_true",
+        help="Run the fixture pipeline on an explicitly synthetic temporary manifest; never measures accuracy.",
+    )
+    modes.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Check live-run gates and exit without loading a manifest or constructing a provider/client.",
+    )
+    parser.add_argument("--manifest", type=Path)
     parser.add_argument("--split", choices=("dev", "validation", "test"), default="validation")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--live", action="store_true", help="Request live evaluation; still requires env opt-in.")
@@ -883,10 +1282,40 @@ def main() -> None:
         help="Required to run the frozen test split; any returned prediction consumes the held-out set.",
     )
     args = parser.parse_args()
+    if args.preflight_only:
+        blocker = _live_block_code(args)
+        status = f"BLOCKED:{blocker}" if blocker else "PREFLIGHT_OK_NO_CLIENT_CREATED"
+        print(f"provider_preflight: provider={settings.extraction_provider} status={status}")
+        if blocker:
+            raise SystemExit(2)
+        return
+
+    if args.offline_fixture_smoke:
+        if args.live or args.confirm_held_out:
+            parser.error("offline fixture smoke cannot be combined with --live or --confirm-held-out")
+        if args.manifest is None or args.report is None:
+            parser.error("offline fixture smoke requires explicit --manifest and --report paths")
+        try:
+            report = evaluate_offline_fixture_smoke(
+                manifest_path=args.manifest,
+                report_path=args.report,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"offline fixture smoke failed before report generation: {exc}") from exc
+        print(
+            f"fixture_offline_pipeline_smoke: provider=fixture n={report['sample_count']} "
+            f"completed={report['completed_sample_count']} failures={report['failure_count']} "
+            f"accuracy=NOT_MEASURED report={args.report}"
+        )
+        if report["failure_count"]:
+            raise SystemExit(1)
+        return
+
+    manifest_path = args.manifest or DEFAULT_MANIFEST
     report_path = args.report or ROOT / "evals" / "reports" / f"ai_corpus_{args.split}_latest.json"
     try:
         report = evaluate(
-            manifest_path=args.manifest.resolve(),
+            manifest_path=manifest_path.resolve(),
             split=args.split,
             report_path=report_path.resolve(),
             live=args.live,

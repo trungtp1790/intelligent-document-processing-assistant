@@ -1,6 +1,6 @@
 # Intelligent Document Processing Assistant
 
-Invoice review assistant with tenant-scoped login, private uploads, durable jobs, fixture and opt-in Bedrock/Foundry extraction, immutable revisions, purchase-order reconciliation, reviewer decisions, and LangGraph review pause/resume with PostgreSQL checkpoints. Read-only MCP, policy lookup, and the single-agent copilot are documented extensions. Synthetic fixtures verify plumbing and rule behavior only; they are not evidence of live AI accuracy.
+Invoice review assistant with tenant-scoped login, private uploads, durable jobs, offline fixtures and opt-in Azure Document Intelligence/Bedrock/Foundry extraction, immutable revisions, purchase-order reconciliation, reviewer decisions, and LangGraph review pause/resume with PostgreSQL checkpoints. Read-only MCP, policy lookup, and the single-agent copilot are documented extensions. Synthetic fixtures verify plumbing and rule behavior only; they are not evidence of live AI accuracy.
 
 ## Portfolio and architecture
 
@@ -65,7 +65,7 @@ MCP is read-only and returns bounded fields from the same tenant-scoped applicat
 
 Choose one of the 12 bundled synthetic samples in the UI. Each file is labeled `DEMO` and is mapped by SHA-256 to its own fixed fixture result. Fixture mode rejects an unlisted upload with `FIXTURE_NOT_FOUND` before persisting it; the UI directs users to bundled samples and disables arbitrary uploads while the fixture library is active. It never falls back to a fabricated success. The UI displays **Fixture demo — dữ liệu trích xuất có sẵn** for fixture-derived records.
 
-The project is not deployed. Bedrock and Foundry adapters are implemented, but live calls remain **LIVE_PENDING**: the active workspace is in fixture mode, has no provider endpoint/model deployment configured, and keeps live calls disabled. No live request has been made. Fixture mode and synthetic policy lookup run without an API key. The app supports PDFs and PNG/JPEG within configured limits. Password-protected/corrupt PDFs and unsupported files are rejected at upload. Provider evidence is page-level; exact bounding boxes are not claimed.
+The project is not deployed. Azure Document Intelligence, Bedrock, and Foundry live calls remain **LIVE_PENDING**: no live request is claimed by the offline implementation and the service credentials/configuration have not been verified here. Fixture mode and synthetic policy lookup run without an API key. The app supports PDFs and PNG/JPEG within configured limits. Password-protected/corrupt PDFs and unsupported files are rejected at upload. Provider evidence is page-level; exact bounding boxes are not claimed.
 
 ## Environment
 
@@ -82,6 +82,14 @@ The checked SDK is boto3 1.43.118. Amazon Nova Lite (`amazon.nova-lite-v1:0`) is
 ## Microsoft Foundry (opt-in)
 
 The Foundry adapter uses the pinned OpenAI Python SDK against the model inference endpoint ending in `/openai/v1/`; `FOUNDRY_DEPLOYMENT` is the deployed alias passed as the request model. Configure `FOUNDRY_MODEL_ENDPOINT`, `FOUNDRY_DEPLOYMENT`, `EXTRACTION_PROVIDER=foundry`, and `ALLOW_LIVE_MODEL_CALLS=true` in the untracked `.env`. A deployment must support chat completions, image input, and Structured Outputs. Entra authentication through `DefaultAzureCredential` is used when no local `FOUNDRY_API_KEY` is set. No project endpoint, model, region, or account is selected in this repo. See [the Foundry runbook](docs/runbook.md#foundry-extraction-m5) and [the M5 decision](docs/decisions.md#2026-10-27--m5-foundry-extraction-adapter).
+
+## Azure Document Intelligence (opt-in)
+
+Azure is selected only with `EXTRACTION_PROVIDER=azure_document_intelligence` and `ALLOW_LIVE_MODEL_CALLS=true`; fixture mode stays the offline default. Set `DOCUMENT_INTELLIGENCE_ENDPOINT`; authenticate with `DOCUMENT_INTELLIGENCE_API_KEY` or the Azure `DefaultAzureCredential` chain. The adapter uses the pinned `azure-ai-documentintelligence` 1.0.2 SDK, API `2024-11-30`, and `prebuilt-invoice`; it sends the original PDF/PNG/JPEG and supports the app's existing 10-page/15 MiB limits. The live call never falls back to a fixture or another provider.
+
+The invoice model documents Vietnamese (`vi`) and supports PDF, JPEG, and PNG [in Microsoft's language and format tables](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/language-support/prebuilt?view=doc-intel-4.0.0). Azure field `content` is retained as the raw value; normalized values are produced by the existing application rules. Page, bounding region, and confidence are stored only when the service returns them. The adapter does not persist a full raw Azure response or infer token usage; token counts and cost remain unknown, while actual call latency is recorded. Offline contract tests use a fake client and do not verify Azure service behavior. Azure remains **LIVE_PENDING** until a real credentialed call is explicitly configured and checked.
+
+See [Azure provider runbook](docs/runbook.md#azure-document-intelligence-m2) and [the Azure adapter decision](docs/decisions.md#2026-11-04--azure-document-intelligence-adapter).
 
 ## Policy guidance lookup (M5b)
 
@@ -105,13 +113,17 @@ After applying the migrations, run docker compose exec -T api python -m app.seed
 
 `evals/datasets/synthetic_invoice_corpus_v1/` contains 90 generated, watermarked PDFs with separate SHA-verified programmatic reference labels. These labels are not human annotated, and the corpus is not evidence of performance on real invoices. The grouped split is 30 dev samples (3 families), 20 validation samples (2 families), and 40 held-out test samples (4 families); layout families and source document IDs cannot cross splits. The runner verifies hashes, metadata, PDF validity, split isolation, and label schemas before scoring. Fixture samples and post-review/manual-correction values are excluded.
 
-Use the host Python environment to keep generated reports on the host:
+Use the host Python environment to keep generated reports on the host. Fixture remains the default and offline provider; it is blocked from AI accuracy evaluation. The runner can explicitly evaluate Bedrock, Foundry, or Azure Document Intelligence when the selected provider is configured and both live gates are enabled. Missing Azure endpoint, SDK pin, or live opt-in blocks the run before provider input is sent.
 
 ```powershell
-python scripts/evaluate_ai_corpus.py --split validation --live
+# Future Azure validation command. Configure the provider and live opt-in locally first.
+$report = "evals/reports/azure_validation_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+python scripts/evaluate_ai_corpus.py --split validation --live --report $report
 ```
 
-The run requires `ALLOW_LIVE_MODEL_CALLS=true` and either a fully configured Bedrock provider or Foundry endpoint/deployment. Without live configuration, the report records blocked samples and leaves AI accuracy `NOT_MEASURED`; it never substitutes fixture predictions. A held-out run requires an explicit confirmation and consumes the test split once a model input is attempted:
+For Azure, set `EXTRACTION_PROVIDER=azure_document_intelligence`, `ALLOW_LIVE_MODEL_CALLS=true`, and `DOCUMENT_INTELLIGENCE_ENDPOINT=<HTTPS resource endpoint>` in the local configuration. If using key authentication, inject `DOCUMENT_INTELLIGENCE_API_KEY=<secret from a local secret store>` without putting it in a command, report, or source file; otherwise use the configured Azure identity chain. This command was not run during offline verification. A successful run measures only the existing synthetic, programmatically labeled validation split and is not evidence of real-invoice performance. Provider-reported token/cost values are recorded when present; unsupported usage and the Azure immutable model build version remain null. Fake-client tests never contribute predictions to accuracy reports.
+
+Without supported live configuration, the report records blocked samples and leaves AI accuracy `NOT_MEASURED`; it never substitutes fixture predictions. A held-out run requires an explicit confirmation and consumes the test split once a model input is attempted:
 
 ```powershell
 python scripts/evaluate_ai_corpus.py --split test --confirm-held-out --live

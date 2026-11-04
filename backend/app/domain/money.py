@@ -18,6 +18,16 @@ def parse_decimal(value: str | int | Decimal | None) -> Decimal | None:
     return parsed
 
 
+def fits_numeric_20_6(value: Decimal) -> bool:
+    """Return whether a finite Decimal fits PostgreSQL NUMERIC(20,6) without rounding."""
+    if not value.is_finite():
+        return False
+    parts = value.as_tuple()
+    scale = max(0, -parts.exponent)
+    integer_digits = max(0, value.adjusted() + 1) if value else 0
+    return scale <= MAX_SCALE and integer_digits <= 20 - MAX_SCALE
+
+
 def round_vnd(value: Decimal) -> Decimal:
     return value.quantize(VND_QUANTUM, rounding=ROUND_HALF_UP)
 

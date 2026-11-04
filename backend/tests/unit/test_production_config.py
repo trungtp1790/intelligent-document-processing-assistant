@@ -30,6 +30,15 @@ def test_valid_production_settings_pass_runtime_validation() -> None:
     validate_runtime_settings(_production_settings())
 
 
+def test_production_can_select_azure_document_intelligence_explicitly() -> None:
+    validate_runtime_settings(
+        _production_settings(
+            extraction_provider="azure_document_intelligence",
+            document_intelligence_endpoint="https://northwind.cognitiveservices.azure.com/",
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

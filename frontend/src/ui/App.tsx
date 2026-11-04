@@ -12,7 +12,12 @@ type PO = {
   lines: { id: string; line_no: number; sku: string | null; description: string; unit: string; quantity: string; unit_price: string }[];
 };
 type Issue = { code: string; severity: "BLOCK" | "WARN"; field_path?: string };
-type Evidence = { field_path: string; page_no: number; raw_text: string | null; origin: string; verification_state: string; actor_id: string | null; note: string | null };
+type Evidence = {
+  field_path: string; page_no: number | null; raw_value: string | null; normalized_value: string | null;
+  raw_text: string | null; bbox: Record<string, unknown> | null; confidence: number | null;
+  normalization_issue: string | null; origin: string; verification_state: string;
+  actor_id: string | null; note: string | null;
+};
 type DocumentPageRef = { page_no: number; page_hash: string; preview_url: string };
 type InvoiceRow = {
   id: string; document_id: string; filename: string; mime: string; pages: number;
@@ -51,6 +56,10 @@ const reconciliationStatusText: Record<string, string> = {
 const issueText: Record<string, string> = {
   REQUIRED_FIELD_MISSING: "Thiếu trường bắt buộc", AMBIGUOUS_NUMBER: "Số chưa rõ cách đọc",
   AMBIGUOUS_DATE: "Ngày chưa rõ cách đọc", UNSUPPORTED_CASE: "Trường hợp ngoài phạm vi M0/M1",
+  INVALID_NUMBER: "Giá trị số không đúng định dạng", NUMERIC_OVERFLOW: "Giá trị vượt giới hạn số cho phép",
+  INVALID_DATE: "Ngày không hợp lệ", UNSUPPORTED_LOCALE: "Chưa hỗ trợ locale chuẩn hóa",
+  SOURCE_PAGE_MISSING: "Thiếu trang nguồn — reviewer phải xác minh trước khi duyệt",
+  SOURCE_PAGE_INVALID: "Trang nguồn không hợp lệ",
   SUPPLIER_MISMATCH: "Nhà cung cấp không khớp PO", PO_NOT_FOUND: "Không tìm thấy PO",
   PO_CLOSED: "PO đã đóng", LINE_MAPPING_REQUIRED: "Cần ánh xạ dòng hàng",
   QUANTITY_MISMATCH: "Số lượng không khớp", UNIT_PRICE_MISMATCH: "Đơn giá không khớp",
@@ -64,6 +73,9 @@ function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === "FIXTURE_NOT_FOUND") {
       return "Tệp này không nằm trong bộ mẫu DEMO. Hãy chọn một mẫu có sẵn bên dưới; tệp riêng cần nhà cung cấp trích xuất thật.";
+    }
+    if (error.code === "MANUAL_SOURCE_PAGE_REQUIRED") {
+      return "Hãy nhập trang bạn đã đối chiếu cho giá trị vừa chỉnh sửa.";
     }
     return `${error.message}${error.code ? ` (${error.code})` : ""}`;
   }
@@ -286,6 +298,9 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [reason, setReason] = useState("Sửa theo chứng từ gốc");
   const [sourcePage, setSourcePage] = useState(1);
+  const [manualSourcePageInput, setManualSourcePageInput] = useState("");
+  const [manualEvidencePageInputs, setManualEvidencePageInputs] = useState<Record<string, string>>({});
+  const [manualEvidencePages, setManualEvidencePages] = useState<Record<string, number>>({});
   const [selectedField, setSelectedFieldState] = useState("");
   const [ackWarnings, setAckWarnings] = useState<string[]>([]);
   const [decisionNote, setDecisionNote] = useState("");
@@ -297,7 +312,7 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
   function setSelectedField(path: string) {
     setSelectedFieldState(path);
     const source = current?.evidence.find(item => item.field_path === path);
-    if (source) setSourcePage(source.page_no);
+    if (source?.page_no != null) setSourcePage(Math.max(1, Math.min(current?.pages ?? source.page_no, source.page_no)));
   }
 
   useEffect(() => {
@@ -313,7 +328,7 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
     const next = structuredClone(current.version.data);
     delete next.document_id;
     setDraft(next);
-    setMapping({}); setAckWarnings([]);
+    setMapping({}); setAckWarnings([]); setManualSourcePageInput(""); setManualEvidencePageInputs({}); setManualEvidencePages({});
   }, [current?.version?.id]);
 
   useEffect(() => {
@@ -346,7 +361,9 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
     if (!draft || !current?.version) return;
     const payload = { ...draft }; delete payload.document_id;
     void run("Đã tạo phiên bản mới; kết quả đối soát cũ không còn hiệu lực.", () => api(session, `/invoices/${invoiceId}/versions`, {
-      method: "POST", body: JSON.stringify({ expected_version_id: current.version!.id, reason, manual_source_page: sourcePage, draft: payload }),
+      method: "POST", body: JSON.stringify({ expected_version_id: current.version!.id, reason,
+        manual_source_page: manualSourcePageInput.trim() ? Number(manualSourcePageInput) : null,
+        manual_evidence_pages: manualEvidencePages, draft: payload }),
     }, idempotencyKey()));
   }
   function reconcile() {
@@ -378,6 +395,11 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
   const warnings = current.reconciliation?.issues.filter(issue => issue.severity === "WARN") ?? [];
   const pageUrl = sourceUrl && current.mime === "application/pdf" ? `${sourceUrl}#page=${sourcePage}` : sourceUrl;
   const pageEvidence = selectedField ? current.evidence.find(item => item.field_path === selectedField) : undefined;
+  const missingPageEvidence = current.evidence.filter(item => item.page_no == null && ["MISSING_PROVENANCE", "UNVERIFIED"].includes(item.verification_state));
+  const selectedPageNeedsAttestation = Boolean(selectedField && current.reconciliation?.issues.some(issue => ["SOURCE_PAGE_MISSING", "SOURCE_PAGE_INVALID"].includes(issue.code) && issue.field_path === selectedField));
+  const manualPageInput = selectedField ? manualEvidencePageInputs[selectedField] ?? "" : "";
+  const attestationPage = Number(manualPageInput);
+  const canAttestSelectedPage = manualPageInput.trim() !== "" && Number.isInteger(attestationPage) && attestationPage >= 1 && attestationPage <= current.pages;
 
   return <div className="app-shell">
     <header className="topbar review-topbar"><button className="ghost back-button" onClick={onBack}>← <span>Danh sách</span></button>{current.fixture_mode ? <FixtureBadge /> : <span className="read-only-tag">Nhà cung cấp: {current.provider ?? "chưa rõ"} · Kết quả do model đề xuất</span>}<div className="user-menu"><span>{session.role === "reviewer" ? "Người duyệt" : "Người nhập liệu"}</span><button className="ghost" onClick={() => { /* session remains in memory; sign-out is available from list */ onBack(); }}>Đóng</button></div></header>
@@ -386,12 +408,37 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
       {error && <div className="banner-error" role="alert">{error}</div>}{message && <div className="banner-success" role="status">{message}</div>}
       {current.workflow_status === "PROCESSING_FAILED" && <div className="banner-error"><div><b>Không xử lý được tệp.</b><span>Mã lỗi: {current.job?.error_code ?? "UNKNOWN"}.{current.fixture_mode ? " Chế độ Fixture chỉ nhận mẫu có sẵn." : " Hãy kiểm tra cấu hình nhà cung cấp rồi thử lại."}</span></div><button className="secondary" onClick={() => void run("Đã xếp lại job.", () => api(session, `/jobs/${current.job!.id}/retry`, { method: "POST" }, idempotencyKey()))}>Thử lại</button></div>}
       {current.job && ["PENDING", "PROCESSING", "WAITING_RETRY"].includes(current.job.status) && <div className="job-progress"><span className="spinner"/><div><b>{current.job.status === "PENDING" ? "Đang chờ xử lý" : current.fixture_mode ? "Đang dùng dữ liệu mẫu" : `Đang trích xuất bằng ${current.provider ?? "provider"}`}</b><span>Hồ sơ sẽ tự cập nhật khi hoàn tất.</span></div></div>}
+      {!current.reconciliation && missingPageEvidence.length > 0 && <div className="issue-list" role="alert">{missingPageEvidence.map(item => <div className="issue block" key={item.field_path}><span aria-label="Lỗi chặn">!</span><div><b>{issueText.SOURCE_PAGE_MISSING}</b><button className="link-button" onClick={() => setSelectedField(item.field_path)}>Xem dữ liệu nguồn: {item.field_path}</button></div></div>)}</div>}
       <div className="review-grid">
         <section className="document-panel">
           <div className="panel-heading"><div><p className="eyebrow">Chứng từ gốc</p><h2>{current.filename}</h2></div><span className="page-count">Trang {sourcePage} / {current.pages}</span></div>
           <div className="viewer-toolbar"><button className="secondary" disabled={sourcePage <= 1} onClick={() => setSourcePage(p => Math.max(1, p - 1))}>← Trang trước</button><label>Đi tới trang<input type="number" aria-label="Số trang" min={1} max={current.pages} value={sourcePage} onChange={e => setSourcePage(Math.min(current.pages, Math.max(1, Number(e.target.value) || 1)))} /></label><button className="secondary" disabled={sourcePage >= current.pages} onClick={() => setSourcePage(p => Math.min(current.pages, p + 1))}>Trang sau →</button></div>
           <div className={`document-viewer ${current.mime === "application/pdf" ? "pdf-viewer" : ""}`}>{sourceUrl ? current.mime === "application/pdf" ? <><iframe title="Tài liệu PDF" src={pageUrl} /><div className="pdf-mobile-state"><span className="pdf-file-icon">PDF</span><div><b>Chứng từ PDF</b><p>Mở tài liệu trong tab mới để xem rõ và phóng to khi cần.</p><a href={sourceUrl} target="_blank" rel="noopener noreferrer">Mở tài liệu</a></div></div></> : <img alt={`Trang ${sourcePage} của ${current.filename}`} src={sourceUrl} /> : <div className="loading">Đang tải tài liệu riêng tư…</div>}</div>
-          {selectedField && <div className="source-note"><b>Nguồn của {selectedField}</b><span>{pageEvidence ? `Trang ${pageEvidence.page_no} · ${pageEvidence.origin} · ${pageEvidence.verification_state}` : "Chưa có evidence cho trường này."}</span>{pageEvidence?.raw_text && <small>{pageEvidence.raw_text}</small>}</div>}
+          {selectedField && <div className="source-note">
+            <b>Nguồn của {selectedField}</b>
+            <span>{pageEvidence ? `${pageEvidence.page_no == null ? "Thiếu trang nguồn" : `Trang ${pageEvidence.page_no}`} · ${pageEvidence.origin} · ${pageEvidence.verification_state}` : "Chưa có evidence cho trường này."}</span>
+            {pageEvidence?.raw_value != null && <small>Giá trị gốc: {pageEvidence.raw_value}</small>}
+            {pageEvidence?.normalized_value != null && <small>Giá trị chuẩn hóa: {pageEvidence.normalized_value}</small>}
+            {pageEvidence?.normalization_issue && <small role="alert">Cần kiểm tra: {issueText[pageEvidence.normalization_issue] ?? pageEvidence.normalization_issue}</small>}
+            {pageEvidence?.raw_text && <small>{pageEvidence.raw_text}</small>}
+            {pageEvidence?.confidence != null && <small>Điểm provider (chưa hiệu chuẩn): {pageEvidence.confidence}</small>}
+            {pageEvidence?.bbox && <small>Vùng nguồn do provider trả về: {JSON.stringify(pageEvidence.bbox)}</small>}
+            {session.role === "reviewer" && current.allowed_actions.edit && selectedPageNeedsAttestation && <div className="source-page-attestation">
+              <label htmlFor="manual-evidence-page">Trang bạn đã trực tiếp đối chiếu</label>
+              <input id="manual-evidence-page" type="number" min={1} max={current.pages} step={1} value={manualPageInput} onChange={event => {
+                const value = event.target.value;
+                setManualEvidencePageInputs(old => ({ ...old, [selectedField]: value }));
+                setManualEvidencePages(old => { const next = { ...old }; delete next[selectedField]; return next; });
+              }} />
+              <small>Không điền sẵn trang, vùng hoặc độ tin cậy. Chỉ xác nhận sau khi đã xem chứng từ gốc.</small>
+              <label className="check-row"><input type="checkbox" disabled={!canAttestSelectedPage} checked={manualEvidencePages[selectedField] != null} onChange={event => setManualEvidencePages(old => {
+                const next = { ...old };
+                if (event.target.checked && canAttestSelectedPage) next[selectedField] = attestationPage;
+                else delete next[selectedField];
+                return next;
+              })} /> Tôi xác nhận giá trị này xuất hiện ở trang {manualEvidencePages[selectedField] ?? (canAttestSelectedPage ? attestationPage : "chưa chọn")}</label>
+            </div>}
+          </div>}
           <p className="viewer-disclaimer">{current.mime === "application/pdf" ? "Mở trang nguồn theo số trang; không hiển thị vùng bbox giả." : `${current.fixture_mode ? "Trang nguồn do fixture đề xuất" : "Trang nguồn do provider đề xuất"}; ảnh chưa được xác minh chữ tự động.`}</p>
         </section>
 
@@ -433,7 +480,7 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
                 </div>
               </div>)}
             </div>
-            {current.allowed_actions.edit && <div className="revision-actions"><label>Lý do chỉnh sửa<input value={reason} onChange={e => setReason(e.target.value)} minLength={3} /></label><label>Trang nguồn đã kiểm tra<input type="number" min={1} max={current.pages} value={sourcePage} onChange={e => setSourcePage(Math.min(current.pages, Math.max(1, Number(e.target.value) || 1)))} /></label><button className="secondary" disabled={isBusy} onClick={saveVersion}>Lưu phiên bản mới</button></div>}
+            {current.allowed_actions.edit && <div className="revision-actions"><label>Lý do chỉnh sửa<input value={reason} onChange={e => setReason(e.target.value)} minLength={3} /></label><label>Trang đã đối chiếu cho giá trị sửa<input type="number" min={1} max={current.pages} step={1} value={manualSourcePageInput} onChange={e => setManualSourcePageInput(e.target.value)} placeholder="Nhập số trang" /></label><button className="secondary" disabled={isBusy} onClick={saveVersion}>Lưu phiên bản mới</button></div>}
 
             <div className="reconcile-box">
               <div className="section-title"><div><p className="eyebrow">Đối chiếu theo quy tắc</p><h3>Đối soát với đơn đặt hàng</h3></div>{current.reconciliation && <span className={`recon-pill ${current.reconciliation.status.toLowerCase()}`}>{reconciliationStatusText[current.reconciliation.status] ?? current.reconciliation.status}</span>}</div>
@@ -441,7 +488,7 @@ function InvoiceReview({ session, invoiceId, onBack }: { session: Session; invoi
               {chosenPo && draft.lines.map((line, index) => <label className="mapping-row" key={line.line_id ?? index}><span>{line.sku || line.description || `Dòng ${index + 1}`}</span><select aria-label={`Ánh xạ dòng ${index + 1}`} disabled={!current.allowed_actions.reconcile} value={mapping[line.line_id ?? ""] ?? ""} onChange={e => setMapping(old => ({ ...old, [line.line_id ?? ""]: e.target.value }))}><option value="">Tự đối chiếu SKU</option>{chosenPo.lines.map(poLine => <option value={poLine.id} key={poLine.id}>{poLine.sku || "Không SKU"} · {poLine.description} · {poLine.quantity} × {poLine.unit_price}</option>)}</select></label>)}
               {chosenPo && <div className="po-comparison"><div><span>PO</span><b>{chosenPo.po_number}</b></div><div><span>Nhà cung cấp</span><b>{chosenPo.supplier_name}</b></div><div><span>Dòng hàng</span><b>{chosenPo.lines.length}</b></div><div><span>Đơn vị tiền</span><b>{chosenPo.currency}</b></div></div>}
               {current.allowed_actions.reconcile && <button className="primary" onClick={reconcile} disabled={isBusy || !poId}>Chạy đối soát</button>}
-              {current.reconciliation && <div className="issue-list" aria-live="polite">{current.reconciliation.issues.length ? current.reconciliation.issues.map((issue, i) => <div className={`issue ${issue.severity.toLowerCase()}`} key={`${issue.code}-${i}`}><span aria-label={issue.severity === "BLOCK" ? "Lỗi chặn" : "Cảnh báo"}>{issue.severity === "BLOCK" ? "!" : "i"}</span><div><b>{issueText[issue.code] ?? issue.code}</b>{issue.field_path && <button className="link-button" onClick={() => { const evidence = current.evidence.find(item => item.field_path === issue.field_path); if (evidence) setSourcePage(evidence.page_no); setSelectedField(issue.field_path!); }}>Mở nguồn: {issue.field_path}</button>}</div></div>) : <div className="pass-note">✓ Không tìm thấy chênh lệch theo chính sách {current.reconciliation.policy_version}</div>}</div>}
+              {current.reconciliation && <div className="issue-list" aria-live="polite">{current.reconciliation.issues.length ? current.reconciliation.issues.map((issue, i) => <div className={`issue ${issue.severity.toLowerCase()}`} key={`${issue.code}-${i}`}><span aria-label={issue.severity === "BLOCK" ? "Lỗi chặn" : "Cảnh báo"}>{issue.severity === "BLOCK" ? "!" : "i"}</span><div><b>{issueText[issue.code] ?? issue.code}</b>{issue.field_path && <button className="link-button" onClick={() => { const evidence = current.evidence.find(item => item.field_path === issue.field_path); if (evidence?.page_no != null) setSourcePage(Math.max(1, Math.min(current.pages, evidence.page_no))); setSelectedField(issue.field_path!); }}>{current.evidence.find(item => item.field_path === issue.field_path)?.page_no == null ? "Xem dữ liệu nguồn" : "Mở trang nguồn"}: {issue.field_path}</button>}</div></div>) : <div className="pass-note">✓ Không tìm thấy chênh lệch theo chính sách {current.reconciliation.policy_version}</div>}</div>}
               {session.role === "reviewer" && current.reconciliation && warnings.length > 0 && <div className="warning-acks"><b>Xác nhận cảnh báo để duyệt</b>{warnings.map(issue => <label className="check-row" key={issue.code}><input type="checkbox" checked={ackWarnings.includes(issue.code)} onChange={e => setAckWarnings(old => e.target.checked ? [...old, issue.code] : old.filter(x => x !== issue.code))} />{issueText[issue.code] ?? issue.code}</label>)}</div>}
               {session.role === "reviewer" && current.reconciliation && current.allowed_actions.reject && <div className="decision-box"><label>Ghi chú review<textarea rows={2} value={decisionNote} onChange={e => setDecisionNote(e.target.value)} placeholder="Ghi chú từ chối hoặc review nội bộ…" /></label><div className="decision-buttons"><button className="danger-outline" disabled={isBusy || decisionNote.trim().length < 3} onClick={() => decide("REJECT")}>Từ chối</button>{current.allowed_actions.approve && <button className="primary" disabled={isBusy || (warnings.length > 0 && warnings.some(item => !ackWarnings.includes(item.code)))} onClick={() => decide("APPROVE")}>Phê duyệt nội bộ</button>}</div></div>}
               {session.role === "operator" && <p className="muted small-note">Tài khoản người nhập liệu không có quyền duyệt. Cần đăng nhập bằng tài khoản người duyệt để ra quyết định.</p>}

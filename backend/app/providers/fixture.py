@@ -76,7 +76,7 @@ class FixtureProvider:
             candidate=candidate,
             evidence_texts=evidence_texts,
             raw_output_ref=f"fixture://{item['sha256']}",
-            evidence_pages=item.get("evidence_pages", {key: 1 for key in evidence_texts}),
+            evidence_pages=item.get("evidence_pages", {}),
             usage={"model_calls": 0, "note": "synthetic fixture; no model invocation"},
             strategy="fixture_manifest",
         )

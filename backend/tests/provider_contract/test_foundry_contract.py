@@ -179,7 +179,6 @@ def test_foundry_sends_all_scanned_pdf_pages_as_page_marked_images() -> None:
         (_response(refusal="I cannot process this request"), "PROVIDER_REFUSAL"),
         (_response(finish_reason="length"), "PROVIDER_TRUNCATED"),
         (_response(content="{"), "PROVIDER_SCHEMA_INVALID"),
-        (_response(candidate=_invoice(grand_total="not-money")), "PROVIDER_SCHEMA_INVALID"),
     ],
 )
 def test_foundry_refusal_truncation_and_schema_errors_are_typed_and_recorded(
@@ -199,13 +198,20 @@ def test_foundry_refusal_truncation_and_schema_errors_are_typed_and_recorded(
 
 
 def test_foundry_rejects_missing_evidence_and_out_of_range_pages() -> None:
-    for evidence in (
-        [],
-        [{"field_path": "invoice_number", "page_no": 2, "raw_text": "INV-000123"}],
-    ):
+    for evidence in ([{"field_path": "invoice_number", "page_no": 2, "raw_text": "INV-000123"}],):
         with pytest.raises(ProviderFailure) as captured:
             FoundryProvider(client=FakeClient(_response(evidence=evidence))).extract_invoice(_request())
         assert captured.value.code == "PROVIDER_EVIDENCE_INVALID"
+
+
+def test_foundry_preserves_raw_ambiguous_money_and_does_not_invent_evidence() -> None:
+    result = FoundryProvider(
+        client=FakeClient(_response(candidate=_invoice(grand_total="1234.56"), evidence=[]))
+    ).extract_invoice(_request())
+
+    assert result.candidate["grand_total"] == "1234.56"
+    assert result.evidence_pages == {}
+    assert result.evidence_texts == {}
 
 
 def test_foundry_throttling_reads_retry_after_ms_and_does_not_retry_sdk_call() -> None:

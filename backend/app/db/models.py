@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     Computed,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -386,20 +387,40 @@ class ExtractionEvidence(Base):
             ["invoice_versions.org_id", "invoice_versions.invoice_id", "invoice_versions.id"],
             name="fk_evidence_version_scope",
         ),
-        CheckConstraint("page_no > 0", name="evidence_page_positive"),
+        CheckConstraint("page_no IS NULL OR page_no > 0", name="evidence_page_positive"),
+        CheckConstraint(
+            "page_no IS NOT NULL OR verification_state = 'MISSING_PROVENANCE'",
+            name="evidence_page_provenance_state",
+        ),
+        CheckConstraint("confidence IS NULL OR confidence BETWEEN 0 AND 1", name="evidence_confidence_range"),
+        CheckConstraint(
+            "normalization_issue IS NULL OR normalization_issue IN "
+            "('AMBIGUOUS_NUMBER','INVALID_NUMBER','NUMERIC_OVERFLOW','AMBIGUOUS_DATE','INVALID_DATE','UNSUPPORTED_LOCALE')",
+            name="evidence_normalization_issue",
+        ),
     )
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     invoice_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     version_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     field_path: Mapped[str] = mapped_column(String(200), nullable=False)
-    page_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_no: Mapped[int | None] = mapped_column(Integer)
     raw_value: Mapped[str | None] = mapped_column(Text)
     normalized_value: Mapped[str | None] = mapped_column(Text)
     raw_text: Mapped[str | None] = mapped_column(Text)
     bbox: Mapped[dict[str, Any] | None] = mapped_column(JSON_VALUE)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    normalization_issue: Mapped[str | None] = mapped_column(String(32))
     origin: Mapped[str] = mapped_column(String(24), nullable=False)
     verification_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    provenance_state: Mapped[str] = mapped_column(
+        String(32),
+        Computed(
+            "CASE WHEN page_no IS NULL THEN 'MISSING_PROVENANCE' ELSE verification_state END",
+            persisted=True,
+        ),
+        nullable=False,
+    )
     actor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     note: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)

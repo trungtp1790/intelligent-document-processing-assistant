@@ -187,12 +187,15 @@ def test_bedrock_rejects_invalid_evidence_page(monkeypatch: pytest.MonkeyPatch) 
     assert captured.value.retryable is False
 
 
-def test_bedrock_requires_evidence_for_every_populated_field() -> None:
-    bad = tool_response(invoice={"supplier_name": "ACME Co."})
-    with pytest.raises(ProviderFailure) as captured:
-        BedrockProvider(client=FakeBedrockClient(bad), model_id="demo-model").extract_invoice(request())
-    assert captured.value.code == "PROVIDER_EVIDENCE_INVALID"
-    assert captured.value.retryable is False
+def test_bedrock_keeps_fields_without_provider_evidence_unverified() -> None:
+    result = BedrockProvider(
+        client=FakeBedrockClient(tool_response(invoice={"supplier_name": "ACME Co."})),
+        model_id="demo-model",
+    ).extract_invoice(request())
+
+    assert result.candidate["supplier_name"] == "ACME Co."
+    assert "supplier_name" not in result.evidence_pages
+    assert "supplier_name" not in result.evidence_texts
 
 
 @pytest.mark.parametrize("stop_reason", ["guardrail_intervened", "content_filtered"])
@@ -230,18 +233,17 @@ def test_bedrock_malformed_output_and_context_limit_are_typed(
     assert captured.value.retryable is False
 
 
-def test_bedrock_schema_validation_failure_is_typed_and_recorded() -> None:
+def test_bedrock_preserves_raw_money_for_application_normalization() -> None:
     client = FakeBedrockClient(tool_response(invoice={"grand_total": "not-a-decimal"}))
     recorded: list[dict[str, Any]] = []
-    with pytest.raises(ProviderFailure) as captured:
-        BedrockProvider(client=client, model_id="demo-model").extract_invoice(
-            request(),
-            reserve_invocation=lambda *_: "call-id",
-            record_invocation=lambda call_id, **kwargs: recorded.append({"id": call_id, **kwargs}),
-        )
-    assert captured.value.code == "PROVIDER_SCHEMA_INVALID"
-    assert captured.value.retryable is False
-    assert recorded[0]["failure_code"] == "PROVIDER_SCHEMA_INVALID"
+    result = BedrockProvider(client=client, model_id="demo-model").extract_invoice(
+        request(),
+        reserve_invocation=lambda *_: "call-id",
+        record_invocation=lambda call_id, **kwargs: recorded.append({"id": call_id, **kwargs}),
+    )
+
+    assert result.candidate["grand_total"] == "not-a-decimal"
+    assert recorded[0]["failure_code"] is None
 
 
 def test_bedrock_read_deadline_is_typed_retryable_and_sdk_timeout_is_bounded(
@@ -405,4 +407,93 @@ def test_candidate_evidence_provenance_distinguishes_text_from_page_reference(
     assert provider.request.routing_reason == (
         "vision_low_or_unusable_native_text" if scanned else "native_text"
     )
-    assert evidence["invoice_number"][2] == ("PAGE_REFERENCED" if scanned else "TEXT_VERIFIED")
+    expected_verification = "PAGE_REFERENCED" if scanned else "TEXT_VERIFIED"
+    assert evidence["invoice_number"].verification_state == expected_verification
+
+
+def test_pipeline_keeps_raw_normalized_and_only_provider_supplied_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output)
+    pdf.drawString(30, 750, "Invoice INV-000123 subtotal 1.234.567,89 " * 4)
+    pdf.save()
+    content = output.getvalue()
+    document = SimpleNamespace(
+        id=uuid.uuid4(), sha256="e" * 64, mime="application/pdf", bytes=len(content), pages=1
+    )
+
+    class PipelineProvider(EvidencePipelineProvider):
+        def extract_invoice(self, extraction_request: ExtractionRequest, **_: Any) -> ExtractionResult:
+            self.request = extraction_request
+            return ExtractionResult(
+                provider="test-provider",
+                model_id="offline-contract",
+                candidate={
+                    "invoice_number": "INV-000123",
+                    "invoice_date": "25/12/2026",
+                    "subtotal": "1.234.567,89",
+                    "grand_total": "1234.56",
+                    "tax_total": "0",
+                },
+                evidence_texts={"invoice_number": "INV-000123", "subtotal": "1.234.567,89"},
+                evidence_pages={"invoice_number": 1},
+                evidence_bboxes={"subtotal": {"polygon": [[0.1, 0.2], [0.4, 0.3]]}},
+                evidence_confidences={"subtotal": 0.87},
+                raw_output_ref=None,
+                strategy="test",
+            )
+
+    provider = PipelineProvider("unused")
+    monkeypatch.setattr("app.services.extraction.configured_provider", lambda: provider)
+    canonical, evidence, _, _ = _candidate_and_evidence(
+        document,
+        content,
+        uuid.uuid4(),
+        uuid.uuid4(),
+        1,
+        "vi-VN",
+        datetime.now(UTC) + timedelta(minutes=2),
+    )
+
+    assert canonical["invoice_date"] == "2026-12-25"
+    assert canonical["subtotal"] == "1234567.89"
+    assert canonical["grand_total"] is None
+    assert evidence["subtotal"].raw_value == "1.234.567,89"
+    assert evidence["subtotal"].normalized_value == "1234567.89"
+    assert evidence["subtotal"].page_no is None
+    assert evidence["subtotal"].verification_state == "MISSING_PROVENANCE"
+    assert evidence["subtotal"].bbox == {"polygon": [[0.1, 0.2], [0.4, 0.3]]}
+    assert evidence["subtotal"].confidence == 0.87
+    assert evidence["grand_total"].normalization_issue == "AMBIGUOUS_NUMBER"
+    assert evidence["tax_total"].raw_value == "0"
+    assert evidence["tax_total"].normalized_value == "0"
+
+
+def test_pipeline_does_not_fill_missing_provider_page_bbox_or_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output)
+    pdf.drawString(30, 750, "Invoice INV-000123 " * 6)
+    pdf.save()
+    content = output.getvalue()
+    document = SimpleNamespace(
+        id=uuid.uuid4(), sha256="f" * 64, mime="application/pdf", bytes=len(content), pages=1
+    )
+    provider = EvidencePipelineProvider("INV-000123")
+    monkeypatch.setattr("app.services.extraction.configured_provider", lambda: provider)
+
+    _, evidence, _, _ = _candidate_and_evidence(
+        document,
+        content,
+        uuid.uuid4(),
+        uuid.uuid4(),
+        1,
+        "vi-VN",
+        datetime.now(UTC) + timedelta(minutes=2),
+    )
+
+    assert evidence["invoice_number"].page_no == 1
+    assert evidence["invoice_number"].bbox is None
+    assert evidence["invoice_number"].confidence is None

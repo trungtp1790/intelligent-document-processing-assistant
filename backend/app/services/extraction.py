@@ -5,6 +5,7 @@ import random
 import re
 import threading
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -28,17 +29,35 @@ from app.db.models import (
 from app.db.session import SessionLocal
 from app.documents.storage import get_private_storage
 from app.domain.errors import DomainError
+from app.domain.normalization import normalize_invoice_candidate
 from app.domain.snapshots import canonical_hash
 from app.providers.errors import ProviderFailure
 from app.providers.factory import configured_provider
-from app.providers.protocol import ExtractionPage, ExtractionRequest, ExtractionResult
-from app.schemas import InvoiceData
+from app.providers.protocol import (
+    ExtractionPage,
+    ExtractionRequest,
+    ExtractionResult,
+    validate_bounding_region,
+    validate_confidence,
+)
 from app.services.common import audit
 
 MAX_RENDERED_PAGE_BYTES = 3_750_000
 MAX_RENDERED_PAGE_PIXELS = 25_000_000
 MAX_RENDERED_DOCUMENT_BYTES = 15 * 1024 * 1024
 MAX_RENDERED_PAGE_EDGE = 8000
+
+
+@dataclass(frozen=True)
+class FieldProvenance:
+    raw_value: str | None
+    normalized_value: str | None
+    page_no: int | None
+    raw_text: str | None
+    bbox: dict[str, Any] | None
+    confidence: float | None
+    normalization_issue: str | None
+    verification_state: str
 JOB_LEASE_SECONDS = 60
 JOB_HEARTBEAT_SECONDS = 15
 
@@ -129,7 +148,10 @@ def _make_request(
         native_text_is_usable = sum(normalized_lengths) >= 100 and sum(
             length >= 20 for length in normalized_lengths
         ) >= max(1, (len(text_pages) + 1) // 2)
-        if provider.name == "fixture" or native_text_is_usable:
+        if provider.name == "azure_document_intelligence":
+            pages = tuple(ExtractionPage(page_no=index) for index in range(1, len(text_pages) + 1))
+            route = "azure_prebuilt_invoice"
+        elif provider.name == "fixture" or native_text_is_usable:
             pages = tuple(
                 ExtractionPage(page_no=index, text=page or None)
                 for index, page in enumerate(text_pages, start=1)
@@ -144,9 +166,19 @@ def _make_request(
             route = "vision_low_or_unusable_native_text"
         source_text = {index: page for index, page in enumerate(text_pages, start=1)}
     else:
-        image_page = _image_page(content) if provider.name != "fixture" else ExtractionPage(page_no=1)
+        image_page = (
+            ExtractionPage(page_no=1)
+            if provider.name in {"fixture", "azure_document_intelligence"}
+            else _image_page(content)
+        )
         pages = (image_page,)
-        route = "fixture_manifest" if provider.name == "fixture" else "vision_image_input"
+        route = (
+            "fixture_manifest"
+            if provider.name == "fixture"
+            else "azure_prebuilt_invoice"
+            if provider.name == "azure_document_intelligence"
+            else "vision_image_input"
+        )
         source_text = {}
 
     capabilities = provider.capabilities()
@@ -172,6 +204,7 @@ def _make_request(
             run_id=str(run_id),
             routing_reason=route,
             deadline_seconds_remaining=max(0.0, (deadline_at - datetime.now(UTC)).total_seconds()),
+            document_bytes=content if provider.name == "azure_document_intelligence" else None,
         ),
         source_text,
     )
@@ -204,7 +237,7 @@ def reserve_provider_invocation(
     strategy: str,
     provider_name: str = "bedrock",
 ) -> str:
-    if provider_name not in {"bedrock", "foundry"}:
+    if provider_name not in {"bedrock", "foundry", "azure_document_intelligence"}:
         raise ProviderFailure("PROVIDER_NOT_CONFIGURED", "Live provider is not supported.", retryable=False)
     with SessionLocal.begin() as db:
         job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
@@ -281,7 +314,7 @@ def _candidate_and_evidence(
     fence: int,
     locale: str,
     deadline_at: datetime,
-) -> tuple[dict[str, Any], dict[str, tuple[int, str | None, str]], ExtractionResult, str]:
+) -> tuple[dict[str, Any], dict[str, FieldProvenance], ExtractionResult, str]:
     provider = configured_provider()
     request, source_text = _make_request(document, content, extraction_id, locale, provider, deadline_at)
 
@@ -292,41 +325,83 @@ def _candidate_and_evidence(
 
     result = provider.extract_invoice(
         request,
-        reserve_invocation=reserve_live_invocation if provider.name in {"bedrock", "foundry"} else None,
-        record_invocation=record_provider_invocation if provider.name in {"bedrock", "foundry"} else None,
+        reserve_invocation=reserve_live_invocation
+        if provider.name in {"bedrock", "foundry", "azure_document_intelligence"}
+        else None,
+        record_invocation=record_provider_invocation
+        if provider.name in {"bedrock", "foundry", "azure_document_intelligence"}
+        else None,
     )
-    checked = dict(result.candidate)
-    checked.pop("schema_version", None)
     try:
-        parsed = InvoiceData.model_validate(checked)
+        normalized = normalize_invoice_candidate(result.candidate, locale)
     except ValidationError as exc:
         raise DomainError(
             "EXTRACTION_SCHEMA_INVALID", "Provider output does not match the invoice schema.", 422
         ) from exc
-    canonical = parsed.model_dump(mode="json")
+    canonical = normalized.data
     # Line identifiers are backend-owned; provider values never become domain IDs.
     for line in canonical["lines"]:
         line["line_id"] = str(uuid.uuid4())
     canonical["schema_version"] = "1.0"
     canonical["document_id"] = str(document.id)
 
-    valid_fields = set(_evidence_fields(canonical))
-    unknown_evidence = set(result.evidence_texts) - valid_fields
+    valid_fields = set(normalized.raw_values) | set(normalized.normalized_values)
+    supplied_provenance = (
+        set(result.evidence_texts)
+        | set(result.evidence_pages)
+        | set(result.evidence_bboxes)
+        | set(result.evidence_confidences)
+    )
+    unknown_evidence = supplied_provenance - valid_fields
     if unknown_evidence:
         raise DomainError(
             "EXTRACTION_EVIDENCE_INVALID", "Provider returned evidence for an unknown field.", 422
         )
-    evidence: dict[str, tuple[int, str | None, str]] = {}
-    for field_path in valid_fields:
+    evidence: dict[str, FieldProvenance] = {}
+    for field_path in sorted(valid_fields):
         quote = result.evidence_texts.get(field_path)
-        page_no = result.evidence_pages.get(field_path, 1)
-        if not 1 <= page_no <= document.pages:
+        page_no = result.evidence_pages.get(field_path)
+        if page_no is not None and not 1 <= page_no <= document.pages:
             raise DomainError(
                 "EXTRACTION_EVIDENCE_INVALID", "Evidence references a page outside the document.", 422
             )
-        page_text = source_text.get(page_no, "")
-        verified = bool(quote and page_text and _normalized_text(quote) in _normalized_text(page_text))
-        evidence[field_path] = (page_no, quote, "TEXT_VERIFIED" if verified else "PAGE_REFERENCED")
+        if quote is not None and (not isinstance(quote, str) or not quote.strip()):
+            raise DomainError("EXTRACTION_EVIDENCE_INVALID", "Provider evidence text is invalid.", 422)
+        bbox = result.evidence_bboxes.get(field_path)
+        confidence = result.evidence_confidences.get(field_path)
+        try:
+            bbox = validate_bounding_region(bbox)
+            confidence = validate_confidence(confidence)
+        except ValueError as exc:
+            raise DomainError(
+                "EXTRACTION_EVIDENCE_INVALID",
+                "Provider provenance metadata is invalid.",
+                422,
+            ) from exc
+        page_text = source_text.get(page_no, "") if page_no is not None else ""
+        verified = bool(
+            quote
+            and page_no is not None
+            and page_text
+            and _normalized_text(quote) in _normalized_text(page_text)
+        )
+        verification_state = (
+            "TEXT_VERIFIED"
+            if verified
+            else "PAGE_REFERENCED"
+            if page_no is not None
+            else "MISSING_PROVENANCE"
+        )
+        evidence[field_path] = FieldProvenance(
+            raw_value=normalized.raw_values.get(field_path),
+            normalized_value=normalized.normalized_values.get(field_path),
+            page_no=page_no,
+            raw_text=quote,
+            bbox=bbox,
+            confidence=confidence,
+            normalization_issue=normalized.issues.get(field_path),
+            verification_state=verification_state,
+        )
 
     raw_output_ref = result.raw_output_ref or ""
     if result.raw_output is not None:
@@ -578,20 +653,22 @@ def process_invoice_job(job_id: str) -> None:
             fresh_invoice.version_counter = 1
             fresh_invoice.current_reconciliation_id = None
             fresh_invoice.workflow_status = "REVIEW_REQUIRED"
-            for field_path, value in _evidence_fields(canonical).items():
-                page_no, raw_text, verification = evidence[field_path]
+            for field_path, provenance in evidence.items():
                 db.add(
                     ExtractionEvidence(
                         org_id=job.org_id,
                         invoice_id=job.entity_id,
                         version_id=version.id,
                         field_path=field_path,
-                        page_no=page_no,
-                        raw_value=str(value),
-                        normalized_value=str(value),
-                        raw_text=raw_text,
+                        page_no=provenance.page_no,
+                        raw_value=provenance.raw_value,
+                        normalized_value=provenance.normalized_value,
+                        raw_text=provenance.raw_text,
+                        bbox=provenance.bbox,
+                        confidence=provenance.confidence,
+                        normalization_issue=provenance.normalization_issue,
                         origin="fixture" if result.provider == "fixture" else "model",
-                        verification_state=verification,
+                        verification_state=provenance.verification_state,
                     )
                 )
             run = db.scalar(select(ExtractionRun).where(ExtractionRun.id == extraction_id).with_for_update())
@@ -612,7 +689,7 @@ def process_invoice_job(job_id: str) -> None:
                         "fixture_manifest" if result.provider == "fixture" else "native_text_or_vision",
                     ),
                 }
-                if result.provider in {"bedrock", "foundry"}:
+                if result.provider in {"bedrock", "foundry", "azure_document_intelligence"}:
                     provider_calls = db.scalars(
                         select(ProviderCall)
                         .where(

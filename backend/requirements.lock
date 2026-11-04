@@ -5,6 +5,7 @@ anyio==4.15.1
 argon2-cffi==23.1.0
 argon2-cffi-bindings==26.1.0
 attrs==26.1.0
+azure-ai-documentintelligence==1.0.2
 azure-core==1.41.0
 azure-identity==1.27.0
 billiard==4.3.1
@@ -31,6 +32,7 @@ httptools==0.9.0
 httpx==0.28.1
 httpx2==2.16.0
 idna==3.20
+isodate==0.7.2
 iniconfig==2.3.1
 jiter==0.18.0
 jmespath==1.1.0

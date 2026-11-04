@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import math
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -93,12 +94,12 @@ class POLineCreate(StrictModel):
     @field_validator("quantity", "unit_price")
     @classmethod
     def decimal_string(cls, value: str) -> str:
-        from app.domain.money import parse_decimal
+        from app.domain.money import fits_numeric_20_6, parse_decimal
 
         parsed = parse_decimal(value)
         if parsed is None:
             raise ValueError("Must be a decimal string")
-        if len(parsed.as_tuple().digits) > 20 or max(0, -parsed.as_tuple().exponent) > 6:
+        if not fits_numeric_20_6(parsed):
             raise ValueError("Maximum precision is NUMERIC(20,6)")
         return format(parsed, "f")
 
@@ -125,12 +126,12 @@ class InvoiceLineData(StrictModel):
     def optional_decimal_string(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        from app.domain.money import parse_decimal
+        from app.domain.money import fits_numeric_20_6, parse_decimal
 
         parsed = parse_decimal(value)
         if parsed is None:
             raise ValueError("Must be a decimal string")
-        if len(parsed.as_tuple().digits) > 20 or max(0, -parsed.as_tuple().exponent) > 6:
+        if not fits_numeric_20_6(parsed):
             raise ValueError("Maximum precision is NUMERIC(20,6)")
         return format(parsed, "f")
 
@@ -175,20 +176,78 @@ class InvoiceData(StrictModel):
     def optional_money_string(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        from app.domain.money import parse_decimal
+        from app.domain.money import fits_numeric_20_6, parse_decimal
 
         parsed = parse_decimal(value)
         if parsed is None:
             raise ValueError("Must be a decimal string")
-        if len(parsed.as_tuple().digits) > 20 or max(0, -parsed.as_tuple().exponent) > 6:
+        if not fits_numeric_20_6(parsed):
             raise ValueError("Maximum precision is NUMERIC(20,6)")
         return format(parsed, "f")
+
+
+class _ProviderCandidateModel(BaseModel):
+    """Strict provider wire shape that preserves source strings before normalization."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+
+class ProviderInvoiceLineCandidate(_ProviderCandidateModel):
+    line_id: StrictStr | None = None
+    sku: StrictStr | None = Field(default=None, max_length=100)
+    description: StrictStr | None = Field(default=None, max_length=500)
+    unit: StrictStr | None = Field(default=None, max_length=32)
+    quantity: StrictStr | None = Field(default=None, max_length=64)
+    unit_price: StrictStr | None = Field(default=None, max_length=64)
+    net_amount: StrictStr | None = Field(default=None, max_length=64)
+
+
+class ProviderInvoiceCandidate(_ProviderCandidateModel):
+    """Untrusted extraction output; amounts and dates remain raw until locale normalization."""
+
+    invoice_number: StrictStr | None = Field(default=None, max_length=100)
+    invoice_series: StrictStr | None = Field(default=None, max_length=100)
+    invoice_series_absent_confirmed: StrictBool = False
+    invoice_date: StrictStr | None = Field(default=None, max_length=64)
+    supplier_tax_id: StrictStr | None = Field(default=None, max_length=64)
+    supplier_name: StrictStr | None = Field(default=None, max_length=200)
+    po_number: StrictStr | None = Field(default=None, max_length=80)
+    currency: StrictStr | None = Field(default=None, max_length=3)
+    subtotal: StrictStr | None = Field(default=None, max_length=64)
+    tax_total: StrictStr | None = Field(default=None, max_length=64)
+    grand_total: StrictStr | None = Field(default=None, max_length=64)
+    discount_total: StrictStr | None = Field(default=None, max_length=64)
+    shipping_total: StrictStr | None = Field(default=None, max_length=64)
+    lines: list[ProviderInvoiceLineCandidate] = Field(default_factory=list, max_length=200)
+
+
+class EvidenceResponse(StrictModel):
+    field_path: str
+    page_no: int | None = None
+    raw_value: str | None = None
+    normalized_value: str | None = None
+    raw_text: str | None = None
+    bbox: dict[str, Any] | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    normalization_issue: str | None = None
+    origin: str
+    verification_state: str
+    actor_id: UUID | None = None
+    note: str | None = None
+
+    @field_validator("confidence")
+    @classmethod
+    def finite_confidence(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("Confidence must be finite")
+        return value
 
 
 class VersionCreate(StrictModel):
     expected_version_id: UUID
     reason: str = Field(min_length=3, max_length=500)
-    manual_source_page: int = Field(ge=1, le=10)
+    manual_source_page: int | None = Field(default=None, ge=1, le=10)
+    manual_evidence_pages: dict[str, int] = Field(default_factory=dict, max_length=200)
     draft: InvoiceData
 
 

@@ -8,6 +8,7 @@ import tempfile
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
@@ -20,11 +21,13 @@ from PIL import Image, PngImagePlugin
 from sqlalchemy import event, func, select
 from sqlalchemy.exc import IntegrityError
 
+import app.services.extraction as extraction_service
 from app import main as api_main
 from app.db.models import (
     ApprovalRecord,
     AuditEvent,
     Document,
+    ExtractionEvidence,
     ExtractionRun,
     IdempotencyRequest,
     Invoice,
@@ -187,6 +190,155 @@ def login(email: str, slug: str) -> str:
 
 def sample(filename: str) -> bytes:
     return (ROOT / "data" / "demo" / filename).read_bytes()
+
+
+def test_missing_source_page_blocks_approval_until_reviewer_attests_a_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_main, "register_login_attempt", lambda *_args: 1)
+    original_candidate_and_evidence = extraction_service._candidate_and_evidence
+
+    def omit_invoice_number_page(*args, **kwargs):
+        canonical, evidence, result, raw_output_ref = original_candidate_and_evidence(*args, **kwargs)
+        evidence["invoice_number"] = replace(
+            evidence["invoice_number"], page_no=None, verification_state="MISSING_PROVENANCE"
+        )
+        return canonical, evidence, result, raw_output_ref
+
+    monkeypatch.setattr(extraction_service, "_candidate_and_evidence", omit_invoice_number_page)
+    email, slug, org_id = setup_tenant("reviewer")
+    token = login(email, slug)
+    upload = client.post(
+        "/api/v1/documents",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        files={"file": ("valid.pdf", sample("invoice_valid_native.pdf"), "application/pdf")},
+        data={"locale": "vi-VN"},
+    )
+    assert upload.status_code == 202, upload.text
+    item = upload.json()
+    run_invoice_graph(item["job_id"])
+
+    detail = client.get(
+        f"/api/v1/invoices/{item['invoice_id']}", headers={"Authorization": f"Bearer {token}"}
+    ).json()
+    old_version_id = uuid.UUID(detail["version"]["id"])
+    missing_page = next(row for row in detail["evidence"] if row["field_path"] == "invoice_number")
+    assert missing_page["page_no"] is None
+    assert missing_page["verification_state"] == "MISSING_PROVENANCE"
+    assert missing_page["bbox"] is None
+    assert missing_page["confidence"] is None
+    invalid_evidence = ExtractionEvidence(
+        org_id=org_id,
+        invoice_id=uuid.UUID(item["invoice_id"]),
+        version_id=old_version_id,
+        field_path="constraint_probe",
+        page_no=None,
+        raw_value="synthetic",
+        normalized_value="synthetic",
+        origin="provider",
+        verification_state="UNVERIFIED",
+    )
+    with SessionLocal.begin() as db:
+        with pytest.raises(IntegrityError):
+            with db.begin_nested():
+                db.add(invalid_evidence)
+                db.flush()
+
+    po = next(
+        row
+        for row in client.get(
+            "/api/v1/purchase-orders", headers={"Authorization": f"Bearer {token}"}
+        ).json()
+        if row["po_number"] == "PO-DEMO-001"
+    )
+    reconciliation = client.post(
+        f"/api/v1/invoices/{item['invoice_id']}/reconciliations",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={"expected_version_id": detail["version"]["id"], "po_id": po["id"], "line_mapping": {}},
+    )
+    assert reconciliation.status_code == 201, reconciliation.text
+    blocked = reconciliation.json()
+    assert blocked["status"] == "BLOCKED"
+    assert {
+        "code": "SOURCE_PAGE_MISSING",
+        "severity": "BLOCK",
+        "field_path": "invoice_number",
+    } in blocked["issues"]
+
+    denied = client.post(
+        f"/api/v1/invoices/{item['invoice_id']}/decisions",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={
+            "action": "APPROVE",
+            "expected_version_id": detail["version"]["id"],
+            "reconciliation_id": blocked["reconciliation_id"],
+            "expected_snapshot_hash": blocked["snapshot_hash"],
+            "acknowledged_warning_codes": [],
+        },
+    )
+    assert denied.status_code == 409
+    assert denied.json()["error"]["code"] == "APPROVAL_BLOCKED"
+    assert "SOURCE_PAGE_MISSING" in denied.json()["error"]["details"]["issue_codes"]
+
+    draft = dict(detail["version"]["data"])
+    draft.pop("document_id", None)
+    added_evidence = client.post(
+        f"/api/v1/invoices/{item['invoice_id']}/versions",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={
+            "expected_version_id": detail["version"]["id"],
+            "reason": "Đã đối chiếu số hóa đơn trên chứng từ gốc",
+            "manual_source_page": 1,
+            "manual_evidence_pages": {"invoice_number": 1},
+            "draft": draft,
+        },
+    )
+    assert added_evidence.status_code == 201, added_evidence.text
+    revised = client.get(
+        f"/api/v1/invoices/{item['invoice_id']}", headers={"Authorization": f"Bearer {token}"}
+    ).json()
+    revised_page = next(row for row in revised["evidence"] if row["field_path"] == "invoice_number")
+    assert revised_page["page_no"] == 1
+    assert revised_page["origin"] == "manual"
+    assert revised_page["verification_state"] == "MANUAL"
+    assert revised_page["raw_value"] == missing_page["raw_value"]
+    assert revised_page["normalized_value"] == missing_page["normalized_value"]
+    assert revised_page["bbox"] is None
+    assert revised_page["confidence"] is None
+    with SessionLocal() as db:
+        prior_evidence = db.scalar(
+            select(ExtractionEvidence).where(
+                ExtractionEvidence.version_id == old_version_id,
+                ExtractionEvidence.field_path == "invoice_number",
+            )
+        )
+        assert prior_evidence is not None and prior_evidence.page_no is None
+        assert prior_evidence.verification_state == "MISSING_PROVENANCE"
+
+    second_reconciliation = client.post(
+        f"/api/v1/invoices/{item['invoice_id']}/reconciliations",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={"expected_version_id": revised["version"]["id"], "po_id": po["id"], "line_mapping": {}},
+    )
+    assert second_reconciliation.status_code == 201, second_reconciliation.text
+    second = second_reconciliation.json()
+    assert second["status"] == "WARNING"
+    assert "SOURCE_PAGE_MISSING" not in {issue["code"] for issue in second["issues"]}
+    assert "SOURCE_NOT_TEXT_VERIFIED" in {issue["code"] for issue in second["issues"]}
+    approved = client.post(
+        f"/api/v1/invoices/{item['invoice_id']}/decisions",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={
+            "action": "APPROVE",
+            "expected_version_id": revised["version"]["id"],
+            "reconciliation_id": second["reconciliation_id"],
+            "expected_snapshot_hash": second["snapshot_hash"],
+            "acknowledged_warning_codes": ["SOURCE_NOT_TEXT_VERIFIED"],
+            "note": "Đã kiểm tra trang nguồn.",
+        },
+    )
+    assert approved.status_code == 201, approved.text
+    assert approved.json()["status"] == "APPROVED"
 
 
 def test_fixture_mode_rejects_unlisted_upload_before_persisting_it() -> None:
@@ -408,6 +560,7 @@ def test_migrated_postgres_upload_fixture_mismatch_and_reviewer_gate() -> None:
 def test_valid_fixture_revision_approval_export_and_stale_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(api_main, "register_login_attempt", lambda *_args: 1)
     email, slug, _ = setup_tenant("reviewer")
     token = login(email, slug)
     file_content = sample("invoice_valid_native.pdf")
@@ -430,6 +583,8 @@ def test_valid_fixture_revision_approval_export_and_stale_snapshot(
     ).json()
     assert detail["evidence"]
     assert all(evidence["verification_state"] == "TEXT_VERIFIED" for evidence in detail["evidence"])
+    assert all(1 <= evidence["page_no"] <= detail["pages"] for evidence in detail["evidence"])
+    original_evidence = {row["field_path"]: row for row in detail["evidence"]}
     po = next(
         row
         for row in client.get("/api/v1/purchase-orders", headers={"Authorization": f"Bearer {token}"}).json()
@@ -452,6 +607,17 @@ def test_valid_fixture_revision_approval_export_and_stale_snapshot(
     draft = dict(detail["version"]["data"])
     draft.pop("document_id", None)
     draft["supplier_name"] = "Demo Supplier manually confirmed"
+    missing_manual_page = client.post(
+        f"/api/v1/invoices/{item['invoice_id']}/versions",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={
+            "expected_version_id": detail["version"]["id"],
+            "reason": "Confirm supplier name",
+            "draft": draft,
+        },
+    )
+    assert missing_manual_page.status_code == 422
+    assert missing_manual_page.json()["error"]["code"] == "MANUAL_SOURCE_PAGE_REQUIRED"
     revision = client.post(
         f"/api/v1/invoices/{item['invoice_id']}/versions",
         headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
@@ -481,6 +647,23 @@ def test_valid_fixture_revision_approval_export_and_stale_snapshot(
     revised_detail = client.get(
         f"/api/v1/invoices/{item['invoice_id']}", headers={"Authorization": f"Bearer {token}"}
     ).json()
+    revised_evidence = {row["field_path"]: row for row in revised_detail["evidence"]}
+    for field_path in ("invoice_number", "subtotal"):
+        assert revised_evidence[field_path]["page_no"] == original_evidence[field_path]["page_no"]
+        assert revised_evidence[field_path]["raw_value"] == original_evidence[field_path]["raw_value"]
+        assert (
+            revised_evidence[field_path]["normalized_value"]
+            == original_evidence[field_path]["normalized_value"]
+        )
+        assert revised_evidence[field_path]["bbox"] == original_evidence[field_path]["bbox"]
+        assert revised_evidence[field_path]["confidence"] == original_evidence[field_path]["confidence"]
+    assert revised_evidence["supplier_name"]["page_no"] == 1
+    assert revised_evidence["supplier_name"]["verification_state"] == "MANUAL"
+    assert revised_evidence["supplier_name"]["raw_value"] is None
+    assert revised_evidence["supplier_name"]["raw_text"] is None
+    assert revised_evidence["supplier_name"]["normalized_value"] == "Demo Supplier manually confirmed"
+    assert revised_evidence["supplier_name"]["bbox"] is None
+    assert revised_evidence["supplier_name"]["confidence"] is None
     second_recon = client.post(
         f"/api/v1/invoices/{item['invoice_id']}/reconciliations",
         headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
